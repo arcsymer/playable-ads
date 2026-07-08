@@ -12,6 +12,7 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 | **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **31 KB** |
 | **STARDUST FOUNDRY** | Clicker / Idle (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/clicker/) | **29 KB** |
 | **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **29 KB** |
+| **NOVA NOODLES** | Tycoon / Management | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **35 KB** |
 
 > These are **original prototypes to show the format**, not shipped campaigns. The
 > operator has 5 Unity games + a TS/JS core stack but no prior shipped playable ads —
@@ -131,6 +132,39 @@ then the install CTA.
 
 Same single-file Canvas skeleton and the same MRAID / `redirect()` hook at the bottom of
 [`puzzle/index.html`](puzzle/index.html).
+
+## NOVA NOODLES (tycoon) — live · *the real management tycoon*
+
+![NOVA NOODLES gameplay](media/tycoon.gif)
+
+A genuine **manage-a-venue tycoon** (not a clicker): run a little space noodle stand.
+Travellers queue up, your **woks auto-cook** bowls, you **tap a ready wok to serve** the
+front traveller for coins — then **spend coins to grow the operation**: build more woks or
+cook faster. Throughput visibly rises as the stand expands, until you hit the milestone →
+**BUSINESS BOOMING!** → install CTA. Engaged play gets there in **~26 s** (typically
+growing to ~3 woks + 2 speed upgrades). See [`tycoon/DESIGN.md`](tycoon/DESIGN.md).
+
+- **A real business loop**, compressed: queue fills → serve → earn → **build/upgrade** →
+  throughput rises → milestone. The satisfaction is *growing a stand*, not tapping one
+  object. The core decision is the classic **expand vs improve** trade-off (New Wok vs
+  Faster Cook).
+- **Guided & unstuck:** an animated "SERVE!" pointer on the first ready wok, then affordable
+  upgrades that pull you in; an inactivity auto-hint. There's **no fail state and no timer**
+  — the queue just grows and woks always keep cooking, so it can't soft-lock.
+- **Juice:** cute alien travellers sliding in/out with want-bubbles, wok cooking rings +
+  steam, a bowl arc-flying to each traveller, floating `+coins`, a rolling coin counter, a
+  "NEW WOK!" / "FASTER!" flash + particles, and a served/target progress bar.
+- **Weight:** **~35 KB** — more logic than the other ads (a queue, parallel stations, an
+  economy), still one HTML file with no assets, ~140× under the 5 MB ceiling.
+
+<p align="center"><img src="media/tycoon-portrait.png" width="240" alt="serve travellers from your woks"> <img src="media/tycoon-endcard.png" width="240" alt="business booming — install CTA"></p>
+
+Same single-file Canvas skeleton and the same MRAID / `redirect()` hook at the bottom of
+[`tycoon/index.html`](tycoon/index.html).
+
+> **Clicker vs tycoon:** [STARDUST FOUNDRY](#stardust-foundry-clicker--idle--live) (at
+> `/clicker/`) is the tap-one-object *clicker/idle* ad; **NOVA NOODLES** here (at
+> `/tycoon/`) is the *management* tycoon — place/upgrade stations and run a venue.
 
 ## Run it locally
 

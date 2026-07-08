@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>NOVA NOODLES — Tycoon Playable Ad</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0a18'/%3E%3Cpath d='M6 15 h20 a10 10 0 0 1 -20 0 Z' fill='%23ffcf6b'/%3E%3Crect x='9' y='8' width='2' height='6' rx='1' fill='%23ff9d4a'/%3E%3Crect x='15' y='7' width='2' height='7' rx='1' fill='%23ff9d4a'/%3E%3Crect x='21' y='8' width='2' height='6' rx='1' fill='%23ff9d4a'/%3E%3C/svg%3E">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0a0714; }
+  body { -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  canvas { display:block; position:fixed; inset:0; touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+/*  NOVA NOODLES — a self-contained HTML5 manage-a-venue tycoon playable ad.
+ *  Run a space noodle stand: serve a queue of travellers, earn coins, and expand
+ *  (build woks / cook faster) until business is booming. Original IP: theme, name,
+ *  and all art are procedural. Ad-network MRAID/redirect hook is at the bottom.
+ */
+(function () {
+"use strict";
+
+// ---------------------------------------------------------------- canvas ---
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var DPR = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+var W = 0, H = 0;
+
+// ---------------------------------------------------------------- config ---
+var TARGET = 20;             // travellers served -> business booming -> win
+var MAXWOKS = 4;
+var WOK_COSTS = [45, 110, 240];    // cost to build wok #2, #3, #4
+var SPEED_COSTS = [35, 75, 150];   // cost to upgrade cook speed
+var BASE_COOK = 2.4, SPEED_MULT = 0.82, COOK_FLOOR = 0.9;
+var ARRIVAL = 1.65, QMAX = 7;
+var HINT_DELAY = 2.6;
+var COIN = "#ffe08a", COIN2 = "#ffb02e", NOODLE = "#ffcf6b", WARM = "#ff9d4a", CY = "#6be6ff";
+var CUST = [["#ffb38f", "#ff7a4a"], ["#9fe0ff", "#3aa6ff"], ["#d7b6ff", "#9a5cff"],
+            ["#a8f0b0", "#4bc76a"], ["#ffe39a", "#ffbe3a"], ["#ffb0d4", "#ff5c9a"]];
+
+// ---------------------------------------------------------------- state ----
+var state = "play";          // "play" | "win"
+var coins = 0, disp = 0, served = 0, coinPop = 0;
+var woks = [{ cookT: 0, ready: false, appear: 0 }];
+var cookTime = BASE_COOK, speedLvl = 0;
+var queue = [], leaving = [], flying = [], steam = [], particles = [], floaters = [];
+var arrivalT = ARRIVAL * 0.6;
+var guiding = true, idleTimer = 0;
+var shake = 0, flash = 0, T = 0, introFade = 3.8, muted = false, winTime = 0;
+var btnFlash = { wok: 0, fast: 0 };
+
+// layout
+var hudH = 80, hudSmall = 18, pad = 16;
+var queueY = 0, custR = 20, qStartX = 0, qSpacing = 44;
+var wokY = 0, wokR = 40, wokSlotX = [];
+var btnRect = { wok: null, fast: null }, muteRect = null, ctaRect = null, land = false;
+var stars = [], aurora = [];
+
+// ---------------------------------------------------------------- audio ----
+var actx = null, master = null;
+function ensureAudio() {
+  if (actx) { if (actx.state === "suspended") actx.resume(); return; }
+  try { var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    actx = new AC(); master = actx.createGain(); master.gain.value = 0.5; master.connect(actx.destination);
+  } catch (e) { actx = null; }
+}
+function tone(freq, dur, type, vol, delay) {
+  if (!actx || muted) return;
+  var t0 = actx.currentTime + (delay || 0);
+  var o = actx.createOscillator(), g = actx.createGain();
+  o.type = type || "sine"; o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol || 0.3, t0 + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function sfxServe() { tone(560, 0.09, "triangle", 0.22); tone(840, 0.09, "sine", 0.14, 0.03); }
+function sfxBuy()   { [523, 659, 880].forEach(function (f, i) { tone(f, 0.22, "triangle", 0.24, i * 0.05); }); }
+function sfxArrive(){ tone(320, 0.08, "sine", 0.1); }
+function sfxDeny()  { tone(150, 0.12, "sawtooth", 0.1); }
+function sfxWin()   { [523, 659, 784, 1046, 1318].forEach(function (f, i) { tone(f, 0.55, "triangle", 0.3, i * 0.1); }); tone(70, 1.1, "sawtooth", 0.22); }
+
+// ---------------------------------------------------------------- util -----
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function inRect(r, x, y) { return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
+function fmt(n) { n = Math.floor(n); return n < 1000 ? "" + n : (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "K"; }
+function price() { return 10 + (woks.length - 1) * 4 + speedLvl * 3; }
+function slotX(i) { return qStartX + i * qSpacing; }
+
+// ---------------------------------------------------------------- actions --
+function addCustomer() {
+  if (queue.length >= QMAX) return;
+  var pal = CUST[(Math.random() * CUST.length) | 0];
+  queue.push({ c1: pal[0], c2: pal[1], x: W + custR * 2, y: queueY, tx: slotX(queue.length), state: "in", bob: Math.random() * 6 });
+  retargetQueue(); sfxArrive();
+}
+function retargetQueue() { for (var i = 0; i < queue.length; i++) queue[i].tx = slotX(i); }
+function firstReadyWok() { for (var i = 0; i < woks.length; i++) if (woks[i].ready) return i; return -1; }
+function canServe() { return firstReadyWok() >= 0 && queue.length > 0 && queue[0].state === "wait"; }
+
+function serveWith(wi) {
+  if (state !== "play" || wi < 0 || !woks[wi] || !woks[wi].ready) return false;
+  if (!queue.length || queue[0].state !== "wait") return false;
+  var cu = queue.shift(); retargetQueue();
+  woks[wi].ready = false; woks[wi].cookT = 0;
+  cu.state = "leave"; cu.tLeave = 0; leaving.push(cu);
+  var p = price(); coins += p; served++; coinPop = 1; guiding = false; idleTimer = 0;
+  floaters.push({ x: cu.x, y: cu.y - custR, text: "+" + p, t: 0, dur: 0.9, color: COIN, size: Math.min(custR, 26) });
+  flying.push({ x: wokSlotX[wi], y: wokY - wokR, tx: cu.x, ty: cu.y, t: 0, dur: 0.32 });
+  for (var k = 0; k < 6; k++) { var a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 90;
+    particles.push({ x: cu.x, y: cu.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, life: 0.5, max: 0.6, color: COIN, size: 2 + Math.random() * 2, g: 240 }); }
+  sfxServe();
+  if (served >= TARGET) win();
+  return true;
+}
+function buyWok() {
+  if (state !== "play" || woks.length >= MAXWOKS) return false;
+  var cost = WOK_COSTS[woks.length - 1];
+  if (coins < cost) { sfxDeny(); btnFlash.wok = -1; return false; }
+  coins -= cost; woks.push({ cookT: cookTime * 0.4, ready: false, appear: 1 });
+  btnFlash.wok = 1; shake = Math.min(9, shake + 4); flash = Math.min(0.4, flash + 0.3); guiding = false; idleTimer = 0;
+  floaters.push({ x: wokSlotX[woks.length - 1], y: wokY - wokR * 1.4, text: "NEW WOK!", t: 0, dur: 1.1, color: CY, size: Math.min(wokR * 0.6, 24) });
+  burst(wokSlotX[woks.length - 1], wokY, CY, 18); sfxBuy();
+  return true;
+}
+function buyFast() {
+  if (state !== "play" || speedLvl >= SPEED_COSTS.length) return false;
+  var cost = SPEED_COSTS[speedLvl];
+  if (coins < cost) { sfxDeny(); btnFlash.fast = -1; return false; }
+  coins -= cost; speedLvl++; cookTime = Math.max(COOK_FLOOR, BASE_COOK * Math.pow(SPEED_MULT, speedLvl));
+  btnFlash.fast = 1; shake = Math.min(9, shake + 4); flash = Math.min(0.4, flash + 0.3); guiding = false; idleTimer = 0;
+  floaters.push({ x: W / 2, y: wokY - wokR * 1.4, text: "FASTER COOKING!", t: 0, dur: 1.1, color: CY, size: Math.min(W * 0.06, 26) });
+  for (var i = 0; i < woks.length; i++) burst(wokSlotX[i], wokY, CY, 8);
+  sfxBuy();
+  return true;
+}
+function win() {
+  state = "win"; winTime = 0; shake = 12; flash = 0.8; guiding = false;
+  sfxWin();
+  for (var i = 0; i < 120; i++) { var a = Math.random() * Math.PI * 2, sp = 100 + Math.random() * 460;
+    particles.push({ x: W / 2, y: H * 0.42, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1 + Math.random() * 1.2, max: 2.2, color: [COIN, WARM, CY, "#ff6bb0"][i % 4], size: 2 + Math.random() * 4, g: 50 }); }
+}
+function burst(x, y, color, n) {
+  for (var i = 0; i < n; i++) { var a = Math.random() * Math.PI * 2, sp = 50 + Math.random() * 150;
+    particles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30, life: 0.5 + Math.random() * 0.4, max: 0.9, color: color, size: 2 + Math.random() * 3, g: 240 }); }
+}
+function pickHint() {
+  if (canServe()) return { type: "wok", idx: firstReadyWok() };
+  if (woks.length < MAXWOKS && coins >= WOK_COSTS[woks.length - 1]) return { type: "btn", which: "wok" };
+  if (speedLvl < SPEED_COSTS.length && coins >= SPEED_COSTS[speedLvl]) return { type: "btn", which: "fast" };
+  return null;
+}
+
+// ---------------------------------------------------------------- update ---
+function update(dt) {
+  T += dt;
+  if (shake > 0) shake = Math.max(0, shake - dt * 34);
+  if (flash > 0) flash = Math.max(0, flash - dt * 1.6);
+  if (coinPop > 0) coinPop = Math.max(0, coinPop - dt * 4);
+  if (introFade > 0) introFade -= dt;
+  ["wok", "fast"].forEach(function (k) { if (btnFlash[k] !== 0) { btnFlash[k] += (btnFlash[k] > 0 ? -1 : 1) * dt * 3; if (Math.abs(btnFlash[k]) < 0.02) btnFlash[k] = 0; } });
+
+  if (state === "play") {
+    arrivalT += dt;
+    if (arrivalT >= ARRIVAL) { arrivalT = 0; addCustomer(); }
+    // woks cook
+    for (var i = 0; i < woks.length; i++) {
+      var wk = woks[i]; if (wk.appear > 0) wk.appear = Math.max(0, wk.appear - dt * 2.4);
+      if (!wk.ready) { wk.cookT += dt; if (wk.cookT >= cookTime) { wk.ready = true; wk.cookT = 0; steam.push({ x: wokSlotX[i], y: wokY - wokR * 0.4, t: 0 }); }
+      } else if (Math.random() < dt * 3) steam.push({ x: wokSlotX[i] + (Math.random() - 0.5) * wokR, y: wokY - wokR * 0.4, t: 0 }); }
+    idleTimer += dt;
+  } else winTime += dt;
+
+  disp = lerp(disp, coins, Math.min(1, dt * 10));
+  // queue walk-in
+  for (i = 0; i < queue.length; i++) { var q = queue[i]; q.x = lerp(q.x, q.tx, Math.min(1, dt * 9));
+    if (q.state === "in" && Math.abs(q.x - q.tx) < 4) q.state = "wait"; }
+  // leaving
+  for (i = leaving.length - 1; i >= 0; i--) { var lv = leaving[i]; lv.tLeave += dt; lv.y -= 60 * dt; lv.x += 30 * dt;
+    if (lv.tLeave > 0.6) leaving.splice(i, 1); }
+  // flying bowls
+  for (i = flying.length - 1; i >= 0; i--) { flying[i].t += dt / flying[i].dur; if (flying[i].t >= 1) flying.splice(i, 1); }
+  // steam
+  for (i = steam.length - 1; i >= 0; i--) { steam[i].t += dt; steam[i].y -= 26 * dt; if (steam[i].t > 0.9) steam.splice(i, 1); }
+  for (i = particles.length - 1; i >= 0; i--) { var p = particles[i]; p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; if (p.life <= 0) particles.splice(i, 1); }
+  for (i = floaters.length - 1; i >= 0; i--) { var f = floaters[i]; f.t += dt; f.y -= 30 * dt; if (f.t >= f.dur) floaters.splice(i, 1); }
+}
+
+// ---------------------------------------------------------------- draw -----
+function rr(x, y, w, h, rad) { rad = Math.min(rad, w / 2, h / 2);
+  ctx.beginPath(); ctx.moveTo(x + rad, y); ctx.arcTo(x + w, y, x + w, y + h, rad); ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad); ctx.arcTo(x, y, x + w, y, rad); ctx.closePath(); }
+function coinIcon(x, y, r) {
+  ctx.save(); ctx.translate(x, y); ctx.shadowColor = COIN; ctx.shadowBlur = r;
+  var g = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r); g.addColorStop(0, "#fff4cf"); g.addColorStop(1, COIN2);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = Math.max(1, r * 0.12);
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+}
+function bowlIcon(x, y, r, alpha) {
+  ctx.save(); ctx.globalAlpha = alpha == null ? 1 : alpha; ctx.translate(x, y);
+  // noodles mound
+  ctx.fillStyle = NOODLE; ctx.shadowColor = NOODLE; ctx.shadowBlur = r * 0.5;
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.62, Math.PI, 0); ctx.fill(); ctx.shadowBlur = 0;
+  // bowl
+  var g = ctx.createLinearGradient(0, 0, 0, r); g.addColorStop(0, "#f2f5ff"); g.addColorStop(1, "#c2c8e0");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(-r * 0.85, 0); ctx.lineTo(r * 0.85, 0);
+  ctx.arc(0, 0, r * 0.85, 0, Math.PI); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawCustomer(cu, front) {
+  var r = custR, x = cu.x, y = cu.y + (cu.state === "wait" ? Math.sin(T * 3 + cu.bob) * r * 0.06 : 0);
+  var a = cu.state === "leave" ? clamp(1 - cu.tLeave / 0.6, 0, 1) : 1;
+  ctx.save(); ctx.globalAlpha = a;
+  if (front && cu.state === "wait" && state === "play") {
+    var pr = 0.5 + 0.5 * Math.sin(T * 4);
+    ctx.strokeStyle = "rgba(255,255,255," + (0.25 + pr * 0.35) + ")"; ctx.lineWidth = Math.max(2, r * 0.1);
+    ctx.beginPath(); ctx.arc(x, y + r * 0.2, r * 1.15, 0, Math.PI * 2); ctx.stroke();
+  }
+  var bw = r * 1.3, bh = r * 1.5;
+  rr(x - bw / 2, y - bh * 0.1, bw, bh, bw * 0.42);
+  var g = ctx.createLinearGradient(0, y - bh * 0.1, 0, y + bh); g.addColorStop(0, cu.c1); g.addColorStop(1, cu.c2);
+  ctx.fillStyle = g; ctx.shadowColor = cu.c2; ctx.shadowBlur = r * 0.35; ctx.fill(); ctx.shadowBlur = 0;
+  // antenna
+  ctx.strokeStyle = cu.c1; ctx.lineWidth = Math.max(1.5, r * 0.08); ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(x, y - bh * 0.1); ctx.lineTo(x, y - bh * 0.42); ctx.stroke();
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x, y - bh * 0.46, r * 0.1, 0, Math.PI * 2); ctx.fill();
+  // eyes
+  ctx.fillStyle = "#20233a";
+  ctx.beginPath(); ctx.arc(x - r * 0.28, y + r * 0.25, r * 0.13, 0, Math.PI * 2); ctx.arc(x + r * 0.28, y + r * 0.25, r * 0.13, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.85)"; ctx.beginPath(); ctx.arc(x - r * 0.24, y + r * 0.2, r * 0.05, 0, Math.PI * 2); ctx.arc(x + r * 0.32, y + r * 0.2, r * 0.05, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  // want bubble on front
+  if (front && cu.state === "wait" && state === "play") {
+    var by = y - bh * 0.9;
+    ctx.save(); ctx.globalAlpha = a;
+    rr(x - r * 0.7, by - r * 0.7, r * 1.4, r * 1.1, r * 0.35); ctx.fillStyle = "rgba(255,255,255,0.92)"; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x - r * 0.15, by + r * 0.4); ctx.lineTo(x + r * 0.15, by + r * 0.4); ctx.lineTo(x, by + r * 0.65); ctx.closePath(); ctx.fill();
+    bowlIcon(x, by - r * 0.05, r * 0.5, 1);
+    ctx.restore();
+  }
+}
+function drawWok(i) {
+  var x = wokSlotX[i], y = wokY, r = wokR;
+  var built = i < woks.length;
+  if (!built) { // ghost slot
+    ctx.save(); ctx.setLineDash([6, 6]); ctx.strokeStyle = "rgba(255,255,255,0.14)"; ctx.lineWidth = 2;
+    rr(x - r * 0.9, y - r * 0.6, r * 1.8, r * 1.5, r * 0.3); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,255,255,0.16)"; ctx.font = "700 " + r * 0.7 + "px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("+", x, y + r * 0.1); ctx.restore();
+    return;
+  }
+  var wk = woks[i], sc = 1 + wk.appear * 0.3;
+  ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc); ctx.translate(-x, -y);
+  // stand / burner glow
+  var halo = ctx.createRadialGradient(x, y, 0, x, y, r * 1.5);
+  halo.addColorStop(0, "rgba(255,140,60,0.28)"); halo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(x, y, r * 1.5, 0, Math.PI * 2); ctx.fill();
+  // pot body
+  rr(x - r * 0.85, y - r * 0.35, r * 1.7, r * 1.15, r * 0.35);
+  var pg = ctx.createLinearGradient(0, y - r * 0.35, 0, y + r * 0.8); pg.addColorStop(0, "#4a4f6b"); pg.addColorStop(1, "#23263c");
+  ctx.fillStyle = pg; ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.14)"; ctx.lineWidth = 2; ctx.stroke();
+  // broth surface
+  ctx.save(); rr(x - r * 0.85, y - r * 0.35, r * 1.7, r * 1.15, r * 0.35); ctx.clip();
+  var bg2 = ctx.createLinearGradient(0, y - r * 0.35, 0, y + r * 0.2); bg2.addColorStop(0, "#ffcf6b"); bg2.addColorStop(1, "#e6892f");
+  ctx.fillStyle = bg2; ctx.fillRect(x - r * 0.85, y - r * 0.35, r * 1.7, r * 0.5);
+  ctx.restore();
+  // cooking progress ring OR ready bowl
+  if (!wk.ready) {
+    var frac = clamp(wk.cookT / cookTime, 0, 1);
+    ctx.strokeStyle = "rgba(255,255,255,0.16)"; ctx.lineWidth = Math.max(3, r * 0.14);
+    ctx.beginPath(); ctx.arc(x, y + r * 0.15, r * 0.95, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = WARM; ctx.shadowColor = WARM; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(x, y + r * 0.15, r * 0.95, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); ctx.stroke(); ctx.shadowBlur = 0;
+  } else {
+    var pop = 1 + 0.08 * Math.sin(T * 6);
+    bowlIcon(x, y - r * 0.55 + Math.sin(T * 3) * 2, r * 0.7 * pop, 1);
+    ctx.strokeStyle = "rgba(120,255,180,0.5)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y + r * 0.1, r * 1.05, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawButton(key, r, name, sub, cost, maxed, affordable) {
+  if (!r) return;
+  var fl = btnFlash[key];
+  var hp = (hintTarget && hintTarget.type === "btn" && hintTarget.which === key) ? (0.5 + 0.5 * Math.sin(T * 6)) : (affordable && !maxed ? 0.2 + 0.2 * Math.sin(T * 3.2) : 0);
+  ctx.save();
+  rr(r.x, r.y, r.w, r.h, Math.min(18, r.h * 0.24));
+  var g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
+  if (maxed) { g.addColorStop(0, "rgba(45,60,50,0.5)"); g.addColorStop(1, "rgba(30,42,35,0.5)"); }
+  else if (affordable) { g.addColorStop(0, "rgba(70,90,150,0.55)"); g.addColorStop(1, "rgba(40,55,105,0.55)"); }
+  else { g.addColorStop(0, "rgba(40,44,66,0.5)"); g.addColorStop(1, "rgba(28,30,48,0.5)"); }
+  ctx.fillStyle = g; ctx.fill();
+  if (fl > 0) { ctx.fillStyle = "rgba(120,255,180," + fl * 0.5 + ")"; ctx.fill(); }
+  if (fl < 0) { ctx.fillStyle = "rgba(255,90,90," + (-fl) * 0.4 + ")"; ctx.fill(); }
+  ctx.lineWidth = 2; ctx.strokeStyle = (affordable && !maxed) ? "rgba(140,200,255," + (0.5 + hp) + ")" : "rgba(255,255,255,0.1)"; ctx.stroke();
+
+  var padb = r.h * 0.18, ix = r.x + padb + r.h * 0.26, iy = r.y + r.h * 0.42;
+  ctx.globalAlpha = maxed ? 0.6 : (affordable ? 1 : 0.6);
+  if (key === "wok") { // little pot icon
+    rr(ix - r.h * 0.22, iy - r.h * 0.1, r.h * 0.44, r.h * 0.3, r.h * 0.1); ctx.fillStyle = "#5a6088"; ctx.fill();
+    ctx.fillStyle = NOODLE; ctx.fillRect(ix - r.h * 0.2, iy - r.h * 0.08, r.h * 0.4, r.h * 0.1);
+  } else { // speed chevrons
+    ctx.strokeStyle = CY; ctx.lineWidth = Math.max(2, r.h * 0.05); ctx.lineCap = "round";
+    for (var c = 0; c < 2; c++) { ctx.beginPath(); ctx.moveTo(ix - r.h * 0.14 + c * r.h * 0.16, iy - r.h * 0.14); ctx.lineTo(ix + r.h * 0.02 + c * r.h * 0.16, iy); ctx.lineTo(ix - r.h * 0.14 + c * r.h * 0.16, iy + r.h * 0.14); ctx.stroke(); }
+  }
+  ctx.globalAlpha = 1;
+
+  var tx = r.x + r.h * 0.62 + padb;
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = maxed ? "#8fb59a" : (affordable ? "#f2f5ff" : "#8891b4");
+  ctx.font = "700 " + Math.min(r.h * 0.25, 18) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText(name, tx, r.y + r.h * 0.44);
+  ctx.fillStyle = maxed ? "#7fa88c" : (affordable ? "#aeb8dd" : "#6b7398");
+  ctx.font = "500 " + Math.min(r.h * 0.2, 13) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText(sub, tx, r.y + r.h * 0.7);
+
+  ctx.textAlign = "right";
+  if (maxed) { ctx.fillStyle = "#7fe0a0"; ctx.font = "800 " + Math.min(r.h * 0.24, 17) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText("MAX", r.x + r.w - padb, r.y + r.h * 0.6); }
+  else {
+    ctx.fillStyle = affordable ? COIN : "#7a713f"; ctx.font = "800 " + Math.min(r.h * 0.25, 18) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.fillText(fmt(cost), r.x + r.w - padb - r.h * 0.34, r.y + r.h * 0.6);
+    coinIcon(r.x + r.w - padb - r.h * 0.13, r.y + r.h * 0.53, r.h * 0.12);
+  }
+  ctx.restore();
+}
+function drawHUD() {
+  var big = hudSmall * 1.7;
+  ctx.textBaseline = "middle";
+  // coins group centred-left
+  ctx.font = "800 " + big + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  var txt = fmt(disp), tw = ctx.measureText(txt).width, icr = big * 0.34;
+  var gx = pad + icr, pop = 1 + coinPop * 0.16;
+  ctx.save(); ctx.translate(gx, hudH * 0.34); ctx.scale(pop, pop); coinIcon(0, 0, icr);
+  ctx.textAlign = "left"; ctx.fillStyle = "#fff7e6"; ctx.shadowColor = COIN; ctx.shadowBlur = 12;
+  ctx.font = "800 " + big + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText(txt, icr + big * 0.28, 0); ctx.restore();
+  void tw;
+
+  // title
+  ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.shadowBlur = 0;
+  ctx.fillStyle = "#eef1ff"; ctx.font = "800 " + hudSmall + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("NOVA NOODLES", W - pad - hudSmall * 2.6, hudH * 0.34);
+
+  // served progress bar
+  var pb = { x: pad, y: hudH * 0.72, w: W - pad * 2, h: clamp(hudH * 0.14, 10, 18) };
+  rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2); ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fill();
+  var pr = clamp(served / TARGET, 0, 1);
+  if (pr > 0.001) { ctx.save(); rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2); ctx.clip();
+    var g = ctx.createLinearGradient(pb.x, 0, pb.x + pb.w, 0); g.addColorStop(0, COIN); g.addColorStop(0.6, WARM); g.addColorStop(1, "#ff6bb0");
+    ctx.fillStyle = g; ctx.fillRect(pb.x, pb.y, pb.w * pr, pb.h); ctx.restore();
+    ctx.fillStyle = "rgba(255,255,255,0.9)"; ctx.beginPath(); ctx.arc(pb.x + pb.w * pr, pb.y + pb.h / 2, pb.h * 0.6, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = "#c7cdf0"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.font = "600 " + hudSmall * 0.66 + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("Served  " + served + " / " + TARGET, pb.x + 2, pb.y - pb.h * 0.5);
+
+  // mute
+  var ms = clamp(hudSmall * 1.1, 20, 26);
+  muteRect = { x: W - ms - 12, y: hudH * 0.34 - ms / 2, w: ms, h: ms };
+  ctx.save(); ctx.translate(muteRect.x + ms / 2, muteRect.y + ms / 2); ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.beginPath(); ctx.moveTo(-ms * 0.35, -ms * 0.14); ctx.lineTo(-ms * 0.1, -ms * 0.14); ctx.lineTo(ms * 0.1, -ms * 0.32);
+  ctx.lineTo(ms * 0.1, ms * 0.32); ctx.lineTo(-ms * 0.1, ms * 0.14); ctx.lineTo(-ms * 0.35, ms * 0.14); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = Math.max(1.5, ms * 0.08); ctx.lineCap = "round";
+  if (muted) { ctx.beginPath(); ctx.moveTo(ms * 0.2, -ms * 0.2); ctx.lineTo(ms * 0.44, ms * 0.2); ctx.moveTo(ms * 0.44, -ms * 0.2); ctx.lineTo(ms * 0.2, ms * 0.2); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(ms * 0.16, 0, ms * 0.2, -0.6, 0.6); ctx.stroke(); ctx.beginPath(); ctx.arc(ms * 0.16, 0, ms * 0.36, -0.6, 0.6); ctx.stroke(); }
+  ctx.restore();
+}
+function drawPointer(x, y, label) {
+  var pr = 0.5 + 0.5 * Math.sin(T * 4.5);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255," + (0.3 + pr * 0.45) + ")"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(x, y, wokR * (0.9 + pr * 0.15), 0, Math.PI * 2); ctx.stroke();
+  var dy = y + Math.sin(T * 4.5) * 6;
+  ctx.shadowColor = "#fff"; ctx.shadowBlur = 14; ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath(); ctx.arc(x, dy, wokR * 0.26, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+  if (label) { ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "800 " + Math.min(wokR * 0.5, 20) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.shadowColor = "#000"; ctx.shadowBlur = 6; ctx.fillText(label, x, y - wokR * 1.5); ctx.shadowBlur = 0; }
+  ctx.restore();
+}
+
+function drawBackground() {
+  var g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#140d28"); g.addColorStop(0.55, "#0c0819"); g.addColorStop(1, "#07050f");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (var i = 0; i < aurora.length; i++) { var au = aurora[i];
+    var x = W * (0.5 + 0.42 * Math.sin(T * au.sx + au.px)), y = H * (0.4 + 0.3 * Math.cos(T * au.sy + au.py)), rad = au.rad * Math.min(W, H);
+    var rg = ctx.createRadialGradient(x, y, 0, x, y, rad); rg.addColorStop(0, au.col); rg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = rg; ctx.globalAlpha = 0.16; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+  for (i = 0; i < stars.length; i++) { var s = stars[i];
+    ctx.globalAlpha = (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(T * s.tw + s.ph))) * 0.8; ctx.fillStyle = "#cfe0ff"; ctx.fillRect(s.x * W, s.y * H, s.s, s.s); }
+  ctx.globalAlpha = 1;
+  // counter bar under woks
+  var cy = wokY + wokR * 0.9;
+  var cg = ctx.createLinearGradient(0, cy, 0, cy + 40); cg.addColorStop(0, "rgba(255,255,255,0.08)"); cg.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = cg; ctx.fillRect(0, cy, W, 40);
+  ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+}
+
+var hintTarget = null;
+function drawEndCard() {
+  var a = clamp((winTime - 0.3) / 0.5, 0, 1);
+  ctx.fillStyle = "rgba(8,5,15," + (0.82 * a) + ")"; ctx.fillRect(0, 0, W, H);
+  var cy = H * 0.3; ctx.textAlign = "center"; ctx.textBaseline = "middle"; var pop = 1 + 0.04 * Math.sin(T * 4);
+  var txt = "BUSINESS BOOMING!", base = Math.min(W * 0.12, 58);
+  ctx.font = "800 " + base + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  var mw = ctx.measureText(txt).width, maxW = W * 0.9; if (mw > maxW) base *= maxW / mw;
+  var hs = base * clamp(a * 1.3, 0, 1);
+  ctx.save(); ctx.shadowColor = COIN; ctx.shadowBlur = 26;
+  var g = ctx.createLinearGradient(0, cy - hs, 0, cy + hs); g.addColorStop(0, "#fff0c2"); g.addColorStop(1, WARM);
+  ctx.fillStyle = g; ctx.font = "800 " + hs + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText(txt, W / 2, cy); ctx.restore();
+  ctx.globalAlpha = a;
+  ctx.fillStyle = "#c6ccEE"; ctx.font = "500 " + Math.min(W * 0.045, 22) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("You served " + served + " travellers & grew the stand.", W / 2, cy + hs * 0.78);
+  var bw = Math.min(W * 0.74, 340), bh = Math.min(H * 0.09, 66), bx = (W - bw) / 2, by = H * 0.6;
+  ctaRect = { x: bx, y: by, w: bw, h: bh };
+  ctx.save(); ctx.translate(bx + bw / 2, by + bh / 2); ctx.scale(pop, pop); ctx.translate(-(bx + bw / 2), -(by + bh / 2));
+  rr(bx, by, bw, bh, bh / 2); var bg = ctx.createLinearGradient(bx, by, bx, by + bh); bg.addColorStop(0, "#ffc35b"); bg.addColorStop(1, "#ff8a2b");
+  ctx.fillStyle = bg; ctx.shadowColor = "rgba(255,170,60,0.6)"; ctx.shadowBlur = 26; ctx.fill(); ctx.shadowBlur = 0;
+  ctx.fillStyle = "#3a1c02"; ctx.font = "800 " + Math.min(bh * 0.34, bw * 0.07) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("▶  BUILD YOUR EMPIRE", W / 2, by + bh / 2 + 1); ctx.restore();
+  ctx.globalAlpha = a * 0.6; ctx.fillStyle = "#9aa2c8"; ctx.font = "500 " + Math.min(W * 0.035, 15) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("NOVA NOODLES — free to play", W / 2, by + bh + 26); ctx.globalAlpha = 1;
+}
+
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  hintTarget = (state === "play" && (guiding || idleTimer > HINT_DELAY)) ? pickHint() : null;
+  drawBackground();
+  ctx.save(); if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  // steam behind
+  for (var i = 0; i < steam.length; i++) { var st = steam[i]; ctx.globalAlpha = (1 - st.t / 0.9) * 0.4; ctx.fillStyle = "#dfe4ff";
+    ctx.beginPath(); ctx.arc(st.x, st.y, wokR * 0.18 * (0.6 + st.t), 0, Math.PI * 2); ctx.fill(); } ctx.globalAlpha = 1;
+
+  for (i = 0; i < MAXWOKS; i++) drawWok(i);
+  // queue (front last so it's on top)
+  for (i = leaving.length - 1; i >= 0; i--) drawCustomer(leaving[i], false);
+  for (i = queue.length - 1; i >= 0; i--) drawCustomer(queue[i], i === 0);
+
+  // flying bowls
+  for (i = 0; i < flying.length; i++) { var fb = flying[i], p = clamp(fb.t, 0, 1), ez = 1 - (1 - p) * (1 - p);
+    var mx = (fb.x + fb.tx) / 2, my = Math.min(fb.y, fb.ty) - wokR;
+    var x = lerp(lerp(fb.x, mx, ez), lerp(mx, fb.tx, ez), ez), y = lerp(lerp(fb.y, my, ez), lerp(my, fb.ty, ez), ez);
+    bowlIcon(x, y, wokR * 0.5, 1); }
+
+  // pointer / guide
+  if (hintTarget && hintTarget.type === "wok") drawPointer(wokSlotX[hintTarget.idx], wokY, guiding ? "SERVE!" : null);
+
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (i = 0; i < particles.length; i++) { var pp = particles[i]; ctx.globalAlpha = clamp(pp.life / pp.max, 0, 1);
+    ctx.fillStyle = pp.color; ctx.beginPath(); ctx.arc(pp.x, pp.y, pp.size, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore(); ctx.globalAlpha = 1;
+
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (i = 0; i < floaters.length; i++) { var f = floaters[i]; ctx.globalAlpha = 1 - clamp(f.t / f.dur, 0, 1);
+    ctx.font = "800 " + f.size + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillStyle = f.color; ctx.shadowColor = f.color; ctx.shadowBlur = 12;
+    ctx.fillText(f.text, f.x, f.y); ctx.shadowBlur = 0; } ctx.globalAlpha = 1;
+  ctx.restore(); // shake
+
+  drawHUD();
+  drawButton("wok", btnRect.wok, "New Wok", "more throughput", woks.length < MAXWOKS ? WOK_COSTS[woks.length - 1] : 0, woks.length >= MAXWOKS, woks.length < MAXWOKS && coins >= WOK_COSTS[woks.length - 1]);
+  drawButton("fast", btnRect.fast, "Faster Cook", "quicker bowls", speedLvl < SPEED_COSTS.length ? SPEED_COSTS[speedLvl] : 0, speedLvl >= SPEED_COSTS.length, speedLvl < SPEED_COSTS.length && coins >= SPEED_COSTS[speedLvl]);
+
+  if (introFade > 0 && state === "play") {
+    ctx.globalAlpha = clamp(introFade, 0, 1) * 0.9; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "600 " + Math.min(W * 0.045, 20) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillStyle = "#dfe4ff"; ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+    ctx.fillText("Serve travellers • earn coins • grow your stand", W / 2, btnRect.wok ? btnRect.wok.y - 16 : H - 20); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+  if (flash > 0) { ctx.fillStyle = "rgba(255,240,210," + flash * 0.6 + ")"; ctx.fillRect(0, 0, W, H); }
+  if (state === "win") drawEndCard();
+}
+
+// ---------------------------------------------------------------- input ---
+function wokAt(x, y) { for (var i = 0; i < woks.length; i++) { if (Math.abs(x - wokSlotX[i]) < wokR * 1.1 && Math.abs(y - wokY) < wokR * 1.2) return i; } return -1; }
+function frontCustHit(x, y) { if (queue.length && queue[0].state === "wait") { var c = queue[0]; if (Math.abs(x - c.x) < custR * 1.3 && Math.abs(y - c.y) < custR * 1.6) return true; } return false; }
+function onDown(x, y) {
+  ensureAudio();
+  if (inRect(muteRect, x, y)) { muted = !muted; if (!muted) sfxServe(); return; }
+  if (state === "win") { if (inRect(ctaRect, x, y)) redirect(STORE_URL); return; }
+  if (inRect(btnRect.wok, x, y)) { buyWok(); return; }
+  if (inRect(btnRect.fast, x, y)) { buyFast(); return; }
+  var wi = wokAt(x, y);
+  if (wi >= 0 && woks[wi].ready) { serveWith(wi); return; }
+  if (frontCustHit(x, y)) { serveWith(firstReadyWok()); return; }
+  idleTimer = 0;
+}
+function relCoords(e) { var r = canvas.getBoundingClientRect(); var t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e; return { x: t.clientX - r.left, y: t.clientY - r.top }; }
+canvas.addEventListener("pointerdown", function (e) { e.preventDefault(); var p = relCoords(e); onDown(p.x, p.y); }, { passive: false });
+canvas.addEventListener("pointermove", function (e) { e.preventDefault(); }, { passive: false });
+canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+// ---------------------------------------------------------------- layout --
+function layout() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px"; ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  land = W > H * 1.3;
+  hudH = clamp(H * 0.13, 62, 116); hudSmall = clamp(Math.min(W, H) * 0.045, 15, 24); pad = clamp(Math.min(W, H) * 0.04, 12, 34);
+  var btnH = clamp(H * 0.11, 56, 92), gap = pad * 0.7;
+  var btnY = H - pad - btnH, bw = (W - pad * 2 - gap) / 2;
+  btnRect.wok = { x: pad, y: btnY, w: bw, h: btnH };
+  btnRect.fast = { x: pad + bw + gap, y: btnY, w: bw, h: btnH };
+
+  var sceneTop = hudH, sceneBot = btnY - pad, sceneH = sceneBot - sceneTop;
+  queueY = sceneTop + sceneH * (land ? 0.30 : 0.24);
+  wokY = sceneTop + sceneH * (land ? 0.72 : 0.70);
+  // queue sizing: fit QMAX across
+  qSpacing = Math.min((W - pad * 2) / QMAX, Math.min(W, H) * 0.14);
+  custR = clamp(qSpacing * 0.34, 14, 42);
+  qStartX = pad + qSpacing * 0.5;
+  // woks: MAXWOKS slots centred
+  var wokSpacing = Math.min((W - pad * 2) / MAXWOKS, Math.min(W, H) * 0.24);
+  wokR = clamp(Math.min(wokSpacing * 0.34, sceneH * 0.2), 22, 62);
+  var totalW = MAXWOKS * wokSpacing; var startX = (W - totalW) / 2 + wokSpacing / 2;
+  wokSlotX = []; for (var i = 0; i < MAXWOKS; i++) wokSlotX.push(startX + i * wokSpacing);
+}
+window.addEventListener("resize", layout);
+window.addEventListener("orientationchange", function () { setTimeout(layout, 120); });
+
+// ---------------------------------------------------------------- ambiance -
+function initAmbiance() {
+  stars = []; for (var i = 0; i < 55; i++) stars.push({ x: Math.random(), y: Math.random(), s: Math.random() < 0.8 ? 1 : 2, tw: 0.6 + Math.random() * 2, ph: Math.random() * 7 });
+  aurora = [{ col: "rgba(255,150,70,1)", rad: 0.6, sx: 0.06, sy: 0.05, px: 0, py: 1 },
+            { col: "rgba(150,90,255,1)", rad: 0.6, sx: 0.05, sy: 0.08, px: 2, py: 3 },
+            { col: "rgba(60,200,220,1)", rad: 0.5, sx: 0.07, sy: 0.04, px: 4, py: 0 }];
+}
+
+// ---------------------------------------------------------------- loop ----
+var last = 0;
+function frame(ts) { requestAnimationFrame(frame); if (!last) last = ts; var dt = Math.min(0.05, (ts - last) / 1000); last = ts; update(dt); render(); }
+
+// ---------------------------------------------------------------- boot ----
+initAmbiance(); layout(); requestAnimationFrame(frame);
+
+/* ================================================================= *
+ *  AD-NETWORK / MRAID INTEGRATION HOOK
+ *  Networks (AppLovin, ironSource, Unity Ads, Mintegral…) inject the
+ *  store URL at serve time. Prefer MRAID when present; fall back to
+ *  window.open so it also runs standalone (this demo / double-click).
+ * ================================================================= */
+var STORE_URL = "https://example.com/get-nova-noodles"; // placeholder — network overrides
+function redirect(url) {
+  url = url || STORE_URL;
+  try { if (typeof mraid !== "undefined" && mraid.open) { mraid.open(url); return; } } catch (e) {}
+  window.open(url, "_blank");
+}
+
+// tiny debug hook (harmless) for automated smoke-testing
+window.NN = {
+  state: function () { return state; }, served: function () { return served; }, coins: function () { return Math.floor(coins); },
+  target: function () { return TARGET; }, woks: function () { return woks.length; }, speed: function () { return speedLvl; },
+  ready: function () { return firstReadyWok(); }, queue: function () { return queue.length; },
+  serve: function () { return serveWith(firstReadyWok()); },
+  buyWok: buyWok, buyFast: buyFast,
+  auto: function () { if (canServe()) return serveWith(firstReadyWok());
+    if (woks.length < MAXWOKS && coins >= WOK_COSTS[woks.length - 1]) return buyWok();
+    if (speedLvl < SPEED_COSTS.length && coins >= SPEED_COSTS[speedLvl]) return buyFast(); return false; }
+};
+})();
+</script>
+</body>
+</html>
