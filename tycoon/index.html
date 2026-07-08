@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>STARDUST FOUNDRY — Tycoon Playable Ad</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0a18'/%3E%3Cpath d='M16 4 L18.5 13.5 L28 16 L18.5 18.5 L16 28 L13.5 18.5 L4 16 L13.5 13.5 Z' fill='%23ffcf6b'/%3E%3C/svg%3E">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#070512; }
+  body {
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  canvas { display:block; position:fixed; inset:0; touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+/*  STARDUST FOUNDRY — a self-contained HTML5 tap-to-earn tycoon playable ad.
+ *  Original IP: theme, names, and all art are procedural (no image/audio files).
+ *  Ad-network integration hook (MRAID + redirect) is at the bottom.
+ */
+(function () {
+"use strict";
+
+// ---------------------------------------------------------------- canvas ---
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var DPR = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+var W = 0, H = 0;
+
+// ---------------------------------------------------------------- config ---
+var IGNITE = 1600;         // stardust milestone -> ignite the star -> win + CTA
+var HINT_DELAY = 2.6;      // seconds of inactivity before a nudge
+var GOLD = "#ffcf6b", GOLD2 = "#ff9d3c", CYAN = "#6be6ff", VIOLET = "#c07bff";
+
+// upgrade economy
+function costTap(l)   { return Math.round(15 * Math.pow(1.7, l)); }
+function costDrone(l) { return Math.round(30 * Math.pow(1.8, l)); }
+function tapPower()   { return Math.round(Math.pow(2, lvl.tap)); }           // 1,2,4,8,16...
+function droneInc(d)  { return Math.round(4 * Math.pow(1.6, d - 1)); }        // per-drone/sec
+
+// ---------------------------------------------------------------- state ----
+var state = "play";        // "play" | "win"
+var stardust = 0, disp = 0, perSec = 0;
+var lvl = { tap: 0, drone: 0 };
+var particles = [], floaters = [], drones = [];
+var corePulse = 0, counterPop = 0, shake = 0, flash = 0;
+var guiding = true, hintKey = null, idleTimer = 0;
+var winTime = 0, T = 0, introFade = 3.6, muted = false;
+var btnFlash = { tap: 0, drone: 0 };
+
+// layout regions (filled by layout())
+var coreC = { x: 0, y: 0 }, coreBaseR = 0, sceneRect = null, hud = null;
+var btnRect = { tap: null, drone: null }, muteRect = null, ctaRect = null, land = false;
+
+var stars = [], aurora = [];
+
+// ---------------------------------------------------------------- audio ----
+var actx = null, master = null;
+function ensureAudio() {
+  if (actx) { if (actx.state === "suspended") actx.resume(); return; }
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    actx = new AC(); master = actx.createGain(); master.gain.value = 0.5; master.connect(actx.destination);
+  } catch (e) { actx = null; }
+}
+function tone(freq, dur, type, vol, delay) {
+  if (!actx || muted) return;
+  var t0 = actx.currentTime + (delay || 0);
+  var o = actx.createOscillator(), g = actx.createGain();
+  o.type = type || "sine"; o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol || 0.3, t0 + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+var tapPitch = 0;
+function sfxTap()  { tapPitch = tapPitch > 900 ? 500 : tapPitch + 24; tone(560 + tapPitch * 0.4, 0.09, "triangle", 0.22); }
+function sfxBuy()  { [523, 659, 880].forEach(function (f, i) { tone(f, 0.22, "triangle", 0.26, i * 0.05); }); }
+function sfxWin()  { [392, 523, 659, 784, 1046].forEach(function (f, i) { tone(f, 0.6, "sine", 0.32, i * 0.11); }); tone(70, 1.2, "sawtooth", 0.25); }
+function sfxDeny() { tone(140, 0.12, "sawtooth", 0.1); }
+
+// ---------------------------------------------------------------- util -----
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function inRect(rc, x, y) { return rc && x >= rc.x && x <= rc.x + rc.w && y >= rc.y && y <= rc.y + rc.h; }
+function fmt(n) {
+  n = Math.floor(n);
+  if (n < 1000) return "" + n;
+  if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0).replace(/\.0$/, "") + "K";
+  if (n < 1e9) return (n / 1e6).toFixed(n < 1e7 ? 2 : 0).replace(/\.00$/, "") + "M";
+  return (n / 1e9).toFixed(2) + "B";
+}
+
+// ---------------------------------------------------------------- actions --
+function harvest(x, y) {
+  if (state !== "play") return;
+  guiding = false; idleTimer = 0; hintKey = null; introFade = Math.min(introFade, 0.4);
+  var amt = tapPower();
+  stardust += amt; counterPop = 1; corePulse = 1;
+  floaters.push({ x: x, y: y, text: "+" + fmt(amt), t: 0, dur: 0.9, color: GOLD, size: Math.min(coreBaseR * 0.5, 32) });
+  var n = 8 + Math.min(14, lvl.tap * 2);
+  for (var i = 0; i < n; i++) {
+    var a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 160;
+    particles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30, life: 0.5 + Math.random() * 0.4, max: 0.9, color: Math.random() < 0.5 ? GOLD : GOLD2, size: 2 + Math.random() * 3, g: 260, toCounter: Math.random() < 0.5 });
+  }
+  shake = Math.min(6, shake + 1.2);
+  sfxTap();
+  if (stardust >= IGNITE) win();
+}
+
+function tryBuy(key) {
+  if (state !== "play") return false;
+  var cost = key === "tap" ? costTap(lvl.tap) : costDrone(lvl.drone);
+  if (stardust < cost) { sfxDeny(); btnFlash[key] = -1; return false; }
+  stardust -= cost; guiding = false; idleTimer = 0; hintKey = null;
+  if (key === "tap") { lvl.tap++; }
+  else { lvl.drone++; perSec += droneInc(lvl.drone); addDrone(); }
+  btnFlash[key] = 1; corePulse = 1; shake = Math.min(8, shake + 3); flash = Math.min(0.5, flash + 0.35);
+  floaters.push({ x: coreC.x, y: coreC.y - coreBaseR, text: key === "tap" ? "TAP x2" : "+" + droneInc(lvl.drone) + "/s", t: 0, dur: 1.1, color: CYAN, size: Math.min(coreBaseR * 0.4, 26) });
+  sfxBuy();
+  return true;
+}
+function addDrone() {
+  drones.push({ ang: Math.random() * Math.PI * 2, spd: 0.5 + Math.random() * 0.4, rad: 1 + Math.random() * 0.5, hue: Math.random() < 0.5 ? CYAN : VIOLET, blink: 0 });
+}
+
+function win() {
+  state = "win"; winTime = 0; flash = 1; shake = 14; guiding = false; hintKey = null;
+  sfxWin();
+  for (var i = 0; i < 130; i++) {
+    var a = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 520;
+    particles.push({ x: coreC.x, y: coreC.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1 + Math.random() * 1.2, max: 2.2, color: [GOLD, GOLD2, CYAN, VIOLET][i % 4], size: 2 + Math.random() * 4, g: 40 });
+  }
+}
+
+// ---------------------------------------------------------------- update ---
+function update(dt) {
+  T += dt;
+  if (shake > 0) shake = Math.max(0, shake - dt * 34);
+  if (flash > 0) flash = Math.max(0, flash - dt * 1.6);
+  if (corePulse > 0) corePulse = Math.max(0, corePulse - dt * 3);
+  if (counterPop > 0) counterPop = Math.max(0, counterPop - dt * 4);
+  if (introFade > 0) introFade -= dt;
+  if (btnFlash.tap !== 0) btnFlash.tap += (btnFlash.tap > 0 ? -1 : 1) * dt * 3;
+  if (Math.abs(btnFlash.tap) < 0.02) btnFlash.tap = 0;
+  if (btnFlash.drone !== 0) btnFlash.drone += (btnFlash.drone > 0 ? -1 : 1) * dt * 3;
+  if (Math.abs(btnFlash.drone) < 0.02) btnFlash.drone = 0;
+
+  if (state === "play") {
+    // passive income
+    if (perSec > 0) {
+      stardust += perSec * dt;
+      if (Math.random() < perSec * dt * 0.25) {
+        floaters.push({ x: coreC.x + (Math.random() - 0.5) * coreBaseR, y: coreC.y - coreBaseR * 0.6, text: "+" + fmt(Math.max(1, Math.round(perSec / 6))), t: 0, dur: 0.8, color: CYAN, size: coreBaseR * 0.22 });
+      }
+      if (stardust >= IGNITE) win();
+    }
+    idleTimer += dt;
+    if (!guiding && idleTimer > HINT_DELAY) {
+      hintKey = (stardust >= costDrone(lvl.drone)) ? "drone" : (stardust >= costTap(lvl.tap)) ? "tap" : "core";
+    }
+  } else if (state === "win") { winTime += dt; }
+
+  disp = lerp(disp, stardust, Math.min(1, dt * 10));
+
+  // drones
+  for (var i = 0; i < drones.length; i++) {
+    var d = drones[i]; d.ang += d.spd * dt;
+    if (d.blink > 0) d.blink -= dt;
+    if (Math.random() < dt * 0.6) d.blink = 0.25;
+  }
+  // particles
+  for (i = particles.length - 1; i >= 0; i--) {
+    var p = particles[i];
+    if (p.toCounter && hud) {
+      var tx = hud.cx, ty = hud.cy;
+      p.vx += (tx - p.x) * dt * 6; p.vy += (ty - p.y) * dt * 6;
+    } else { p.vy += p.g * dt; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  // floaters
+  for (i = floaters.length - 1; i >= 0; i--) {
+    var f = floaters[i]; f.t += dt; f.y -= 30 * dt;
+    if (f.t >= f.dur) floaters.splice(i, 1);
+  }
+}
+
+// ---------------------------------------------------------------- draw -----
+function rr(x, y, w, h, rad) {
+  rad = Math.min(rad, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+function sparkle(cx, cy, r, color) {
+  ctx.save(); ctx.translate(cx, cy);
+  ctx.fillStyle = color; ctx.shadowColor = color; ctx.shadowBlur = r;
+  ctx.beginPath();
+  for (var i = 0; i < 8; i++) {
+    var ang = i * Math.PI / 4, rr2 = (i % 2 === 0) ? r : r * 0.4;
+    var x = Math.cos(ang) * rr2, y = Math.sin(ang) * rr2;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function drawBackground() {
+  var g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#100a24"); g.addColorStop(0.55, "#0a0718"); g.addColorStop(1, "#06040f");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (var i = 0; i < aurora.length; i++) {
+    var au = aurora[i];
+    var x = W * (0.5 + 0.42 * Math.sin(T * au.sx + au.px));
+    var y = H * (0.4 + 0.30 * Math.cos(T * au.sy + au.py));
+    var rad = au.rad * Math.min(W, H);
+    var rg = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    rg.addColorStop(0, au.col); rg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = rg; ctx.globalAlpha = 0.16;
+    ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+  for (i = 0; i < stars.length; i++) {
+    var s = stars[i];
+    ctx.globalAlpha = (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(T * s.tw + s.ph))) * 0.8;
+    ctx.fillStyle = "#cfe0ff"; ctx.fillRect(s.x * W, s.y * H, s.s, s.s);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawCore() {
+  var lvlSum = lvl.tap + lvl.drone;
+  var r = coreBaseR * (1 + Math.min(0.5, lvlSum * 0.05)) * (1 + corePulse * 0.12);
+  var cx = coreC.x, cy = coreC.y;
+
+  // orbit rings
+  ctx.save(); ctx.translate(cx, cy);
+  var ringN = 2 + Math.min(4, Math.floor(lvlSum / 2));
+  for (var k = 0; k < ringN; k++) {
+    ctx.rotate(T * (0.12 + k * 0.04) * (k % 2 ? -1 : 1));
+    ctx.beginPath(); ctx.ellipse(0, 0, r * (1.4 + k * 0.22), r * (0.5 + k * 0.14), 0, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(120,200,255," + (0.16 - k * 0.02) + ")"; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.restore();
+
+  // drones on orbit
+  for (var i = 0; i < drones.length; i++) {
+    var d = drones[i];
+    var orad = r * (1.5 + d.rad * 0.4);
+    var dx = cx + Math.cos(d.ang) * orad, dy = cy + Math.sin(d.ang) * orad * 0.62;
+    ctx.save(); ctx.shadowColor = d.hue; ctx.shadowBlur = 10 + d.blink * 30;
+    ctx.fillStyle = d.hue;
+    ctx.beginPath(); ctx.arc(dx, dy, r * 0.11 + d.blink * r * 0.05, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // glow halo
+  var halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 2.4);
+  halo.addColorStop(0, "rgba(255,180,90,0.5)");
+  halo.addColorStop(0.4, "rgba(255,120,60,0.18)");
+  halo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(cx, cy, r * 2.4, 0, Math.PI * 2); ctx.fill();
+
+  // core body
+  var body = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r);
+  body.addColorStop(0, "#fff2cf"); body.addColorStop(0.4, GOLD); body.addColorStop(0.8, GOLD2); body.addColorStop(1, "#b5372a");
+  ctx.save(); ctx.shadowColor = GOLD; ctx.shadowBlur = 30 + corePulse * 30;
+  ctx.fillStyle = body; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // inner energy swirl
+  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+  ctx.globalCompositeOperation = "lighter";
+  for (k = 0; k < 3; k++) {
+    var a = T * (0.6 + k * 0.3) + k * 2;
+    var gx = cx + Math.cos(a) * r * 0.4, gy = cy + Math.sin(a) * r * 0.4;
+    var sg = ctx.createRadialGradient(gx, gy, 0, gx, gy, r * 0.7);
+    sg.addColorStop(0, "rgba(255,255,220,0.5)"); sg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(gx, gy, r * 0.7, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // highlight
+  ctx.globalAlpha = 0.5; ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(cx - r * 0.32, cy - r * 0.34, r * 0.2, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function drawButton(key, rect, name, cost, level, sub, affordable) {
+  if (!rect) return;
+  var fl = btnFlash[key];
+  var pulse = (hintKey === key) ? (0.5 + 0.5 * Math.sin(T * 6))
+            : (affordable ? 0.25 + 0.25 * Math.sin(T * 3.2) : 0);
+  ctx.save();
+  rr(rect.x, rect.y, rect.w, rect.h, Math.min(18, rect.h * 0.24));
+  var g = ctx.createLinearGradient(rect.x, rect.y, rect.x, rect.y + rect.h);
+  if (affordable) { g.addColorStop(0, "rgba(70,90,150,0.55)"); g.addColorStop(1, "rgba(40,55,105,0.55)"); }
+  else { g.addColorStop(0, "rgba(40,44,66,0.5)"); g.addColorStop(1, "rgba(28,30,48,0.5)"); }
+  ctx.fillStyle = g; ctx.fill();
+  if (fl > 0) { ctx.fillStyle = "rgba(120,255,180," + fl * 0.5 + ")"; ctx.fill(); }
+  if (fl < 0) { ctx.fillStyle = "rgba(255,90,90," + (-fl) * 0.4 + ")"; ctx.fill(); }
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = affordable ? "rgba(140,200,255," + (0.5 + pulse * 0.5) + ")" : "rgba(255,255,255,0.10)";
+  ctx.stroke();
+
+  var pad = rect.h * 0.2;
+  // icon
+  var ix = rect.x + pad + rect.h * 0.28, iy = rect.y + rect.h * 0.5;
+  ctx.globalAlpha = affordable ? 1 : 0.55;
+  if (key === "tap") {
+    ctx.fillStyle = GOLD; ctx.shadowColor = GOLD; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.moveTo(ix - rect.h * 0.12, iy - rect.h * 0.22);
+    ctx.lineTo(ix + rect.h * 0.02, iy - rect.h * 0.22); ctx.lineTo(ix - rect.h * 0.05, iy);
+    ctx.lineTo(ix + rect.h * 0.12, iy); ctx.lineTo(ix - rect.h * 0.1, iy + rect.h * 0.26);
+    ctx.lineTo(ix - rect.h * 0.02, iy + rect.h * 0.03); ctx.lineTo(ix - rect.h * 0.16, iy + rect.h * 0.03);
+    ctx.closePath(); ctx.fill(); ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = CYAN; ctx.shadowColor = CYAN; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(ix, iy, rect.h * 0.16, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = CYAN; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(ix, iy, rect.h * 0.3, rect.h * 0.13, 0.5, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+
+  var tx = rect.x + rect.h * 0.62 + pad;
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = affordable ? "#f2f5ff" : "#8891b4";
+  ctx.font = "700 " + Math.min(rect.h * 0.26, 19) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText(name, tx, rect.y + rect.h * 0.42);
+  ctx.fillStyle = affordable ? "#aeb8dd" : "#6b7398";
+  ctx.font = "500 " + Math.min(rect.h * 0.2, 14) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText(sub + "  ·  Lv " + level, tx, rect.y + rect.h * 0.68);
+
+  // cost pill (right)
+  ctx.textAlign = "right";
+  ctx.font = "800 " + Math.min(rect.h * 0.26, 19) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = affordable ? GOLD : "#7a713f";
+  ctx.fillText(fmt(cost), rect.x + rect.w - pad - rect.h * 0.34, rect.y + rect.h * 0.6);
+  sparkle(rect.x + rect.w - pad - rect.h * 0.14, rect.y + rect.h * 0.53, rect.h * 0.11, affordable ? GOLD : "#7a713f");
+  ctx.restore();
+}
+
+function drawHUD() {
+  var pulseCore = (hintKey === "core");
+  // counter — measure text so the sparkle + number stay centred as a group
+  var big = hud.big;
+  var pop = 1 + counterPop * 0.14;
+  ctx.save();
+  ctx.translate(hud.cx, hud.cy); ctx.scale(pop, pop);
+  ctx.font = "800 " + big + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  var txt = fmt(disp);
+  var tw = ctx.measureText(txt).width, icon = big * 0.24, gap = big * 0.16;
+  var sx = -(icon * 2 + gap + tw) / 2;
+  sparkle(sx + icon, 0, icon, GOLD);
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.shadowColor = GOLD; ctx.shadowBlur = 18; ctx.fillStyle = "#fff7e6";
+  ctx.fillText(txt, sx + icon * 2 + gap, 0);
+  ctx.restore();
+
+  // label + rate
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#c7cdf0"; ctx.font = "600 " + hud.small + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("STARDUST", hud.cx, hud.cy - big * 0.62);
+  if (perSec > 0) {
+    ctx.fillStyle = CYAN; ctx.font = "700 " + hud.small + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.fillText("▲ " + fmt(perSec) + " / sec", hud.cx, hud.cy + big * 0.78);
+  }
+
+  // progress bar
+  var pb = hud.bar;
+  rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2);
+  ctx.fillStyle = "rgba(255,255,255,0.10)"; ctx.fill();
+  var pr = clamp(stardust / IGNITE, 0, 1);
+  if (pr > 0.001) {
+    ctx.save(); rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2); ctx.clip();
+    var g = ctx.createLinearGradient(pb.x, 0, pb.x + pb.w, 0);
+    g.addColorStop(0, GOLD); g.addColorStop(0.6, GOLD2); g.addColorStop(1, VIOLET);
+    ctx.fillStyle = g; ctx.fillRect(pb.x, pb.y, pb.w * pr, pb.h);
+    ctx.restore();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath(); ctx.arc(pb.x + pb.w * pr, pb.y + pb.h / 2, pb.h * 0.6, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = "#9aa2c8"; ctx.textAlign = "right"; ctx.font = "600 " + hud.small * 0.9 + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("IGNITE  " + fmt(IGNITE), pb.x + pb.w, pb.y - pb.h * 0.6);
+  ctx.textAlign = "left";
+  ctx.fillText("STARDUST FOUNDRY", pb.x, pb.y - pb.h * 0.6);
+
+  // mute
+  var ms = hud.small * 1.1;
+  muteRect = { x: W - ms - 12, y: 12, w: ms, h: ms };
+  ctx.save(); ctx.translate(muteRect.x + ms / 2, muteRect.y + ms / 2);
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.beginPath(); ctx.moveTo(-ms * 0.35, -ms * 0.14); ctx.lineTo(-ms * 0.1, -ms * 0.14);
+  ctx.lineTo(ms * 0.1, -ms * 0.32); ctx.lineTo(ms * 0.1, ms * 0.32); ctx.lineTo(-ms * 0.1, ms * 0.14);
+  ctx.lineTo(-ms * 0.35, ms * 0.14); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = Math.max(1.5, ms * 0.08); ctx.lineCap = "round";
+  if (muted) { ctx.beginPath(); ctx.moveTo(ms * 0.2, -ms * 0.2); ctx.lineTo(ms * 0.44, ms * 0.2); ctx.moveTo(ms * 0.44, -ms * 0.2); ctx.lineTo(ms * 0.2, ms * 0.2); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(ms * 0.16, 0, ms * 0.2, -0.6, 0.6); ctx.stroke(); ctx.beginPath(); ctx.arc(ms * 0.16, 0, ms * 0.36, -0.6, 0.6); ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawTapHint() {
+  if (!(guiding || hintKey === "core") || state !== "play") return;
+  var r = coreBaseR, cx = coreC.x, cy = coreC.y;
+  var pr = 0.5 + 0.5 * Math.sin(T * 4.5);
+  ctx.save();
+  ctx.lineWidth = Math.max(2, r * 0.06);
+  ctx.strokeStyle = "rgba(255,255,255," + (0.3 + pr * 0.45) + ")";
+  ctx.beginPath(); ctx.arc(cx, cy, r * (1.15 + pr * 0.12), 0, Math.PI * 2); ctx.stroke();
+  // bobbing touch dot + label
+  var by = cy + r * 0.5 + Math.sin(T * 4.5) * r * 0.1;
+  ctx.shadowColor = "#fff"; ctx.shadowBlur = 16; ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath(); ctx.arc(cx, by, r * 0.13, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0; ctx.globalAlpha = 0.4;
+  ctx.beginPath(); ctx.arc(cx, by, r * 0.13 + (0.5 + 0.5 * Math.sin(T * 4.5)) * r * 0.2, 0, Math.PI * 2);
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.font = "800 " + Math.min(r * 0.4, 24) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+  ctx.fillText("TAP TO HARVEST", cx, cy - r * 1.35);
+  ctx.restore();
+}
+
+function drawEndCard() {
+  var a = clamp((winTime - 0.35) / 0.5, 0, 1);
+  ctx.fillStyle = "rgba(6,5,15," + (0.8 * a) + ")"; ctx.fillRect(0, 0, W, H);
+  var cy = H * 0.30;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  var pop = 1 + 0.04 * Math.sin(T * 4);
+  var hs = Math.min(W * 0.12, 60) * clamp(a * 1.3, 0, 1);
+  ctx.save(); ctx.shadowColor = GOLD; ctx.shadowBlur = 28;
+  var g = ctx.createLinearGradient(0, cy - hs, 0, cy + hs);
+  g.addColorStop(0, "#fff0c2"); g.addColorStop(1, "#ff9d3c");
+  ctx.fillStyle = g; ctx.font = "800 " + hs + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("STAR IGNITED!", W / 2, cy);
+  ctx.restore();
+
+  ctx.globalAlpha = a;
+  ctx.fillStyle = "#c6ccEE"; ctx.font = "500 " + Math.min(W * 0.045, 22) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("Your foundry lit a whole new star.", W / 2, cy + hs * 0.75);
+  ctx.fillStyle = GOLD; ctx.font = "700 " + Math.min(W * 0.05, 24) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText(fmt(Math.max(stardust, IGNITE)) + " stardust harvested", W / 2, cy + hs * 1.4);
+
+  var bw = Math.min(W * 0.72, 330), bh = Math.min(H * 0.09, 66), bx = (W - bw) / 2, by = H * 0.62;
+  ctaRect = { x: bx, y: by, w: bw, h: bh };
+  ctx.save();
+  ctx.translate(bx + bw / 2, by + bh / 2); ctx.scale(pop, pop); ctx.translate(-(bx + bw / 2), -(by + bh / 2));
+  rr(bx, by, bw, bh, bh / 2);
+  var bg = ctx.createLinearGradient(bx, by, bx, by + bh);
+  bg.addColorStop(0, "#ffc35b"); bg.addColorStop(1, "#ff8a2b");
+  ctx.fillStyle = bg; ctx.shadowColor = "rgba(255,170,60,0.6)"; ctx.shadowBlur = 26; ctx.fill();
+  ctx.shadowBlur = 0; ctx.fillStyle = "#3a1c02";
+  ctx.font = "800 " + Math.min(bh * 0.36, bw * 0.078) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("▶  BUILD YOUR FOUNDRY", W / 2, by + bh / 2 + 1);
+  ctx.restore();
+
+  ctx.globalAlpha = a * 0.6; ctx.fillStyle = "#9aa2c8";
+  ctx.font = "500 " + Math.min(W * 0.035, 15) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("STARDUST FOUNDRY — free to play", W / 2, by + bh + 26);
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawBackground();
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  drawCore();
+  drawTapHint();
+
+  // particles (additive)
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (var i = 0; i < particles.length; i++) {
+    var p = particles[i]; ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+    ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore(); ctx.globalAlpha = 1;
+
+  // floaters
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (i = 0; i < floaters.length; i++) {
+    var f = floaters[i]; ctx.globalAlpha = 1 - clamp(f.t / f.dur, 0, 1);
+    ctx.font = "800 " + f.size + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.fillStyle = f.color; ctx.shadowColor = f.color; ctx.shadowBlur = 12;
+    ctx.fillText(f.text, f.x, f.y); ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore(); // shake
+
+  // upgrade buttons
+  drawButton("tap", btnRect.tap, "Tap Yield", costTap(lvl.tap), lvl.tap, "+stardust / tap", stardust >= costTap(lvl.tap));
+  drawButton("drone", btnRect.drone, "Collector Drone", costDrone(lvl.drone), lvl.drone, "+stardust / sec", stardust >= costDrone(lvl.drone));
+
+  drawHUD();
+
+  if (introFade > 0 && state === "play") {
+    ctx.globalAlpha = clamp(introFade, 0, 1) * 0.9;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "600 " + Math.min(W * 0.045, 20) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.fillStyle = "#dfe4ff"; ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+    var iy = land ? H - 24 : (btnRect.tap ? btnRect.tap.y - 18 : H - 24);
+    ctx.fillText("Tap the core • buy upgrades • ignite the star", W / 2, iy);
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+
+  // ignite flash
+  if (flash > 0) { ctx.fillStyle = "rgba(255,240,210," + flash * 0.7 + ")"; ctx.fillRect(0, 0, W, H); }
+
+  if (state === "win") drawEndCard();
+}
+
+// ---------------------------------------------------------------- input ---
+function onDown(px, py) {
+  ensureAudio();
+  if (inRect(muteRect, px, py)) { muted = !muted; if (!muted) sfxBuy(); return; }
+  if (state === "win") { if (inRect(ctaRect, px, py)) redirect(STORE_URL); return; }
+  if (inRect(btnRect.tap, px, py)) { tryBuy("tap"); return; }
+  if (inRect(btnRect.drone, px, py)) { tryBuy("drone"); return; }
+  if (inRect(sceneRect, px, py)) harvest(px, py);
+}
+function relCoords(e) {
+  var rect = canvas.getBoundingClientRect();
+  var t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+  return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+}
+canvas.addEventListener("pointerdown", function (e) { e.preventDefault(); var p = relCoords(e); onDown(p.x, p.y); }, { passive: false });
+canvas.addEventListener("pointermove", function (e) { e.preventDefault(); }, { passive: false });
+canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+// ---------------------------------------------------------------- layout --
+function layout() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  land = W > H * 1.3;
+  var pad = clamp(Math.min(W, H) * 0.04, 12, 40);
+
+  if (land) {
+    var colW = W * 0.54;
+    sceneRect = { x: 0, y: 0, w: colW, h: H };
+    coreC = { x: colW * 0.5, y: H * 0.54 };
+    coreBaseR = Math.min(colW, H) * 0.22;
+    var px = colW + pad, pw = W - colW - pad * 2;
+    var bh = clamp(H * 0.17, 56, 88);
+    btnRect.drone = { x: px, y: H - pad - bh, w: pw, h: bh };
+    btnRect.tap = { x: px, y: btnRect.drone.y - bh - pad * 0.6, w: pw, h: bh };
+    var big = Math.min(pw * 0.24, 56);
+    hud = { cx: px + pw / 2, cy: H * 0.24, big: big, small: Math.min(pw * 0.05, 16), iconGap: big * 0.5,
+            bar: { x: px, y: H * 0.4, w: pw, h: clamp(H * 0.03, 12, 20) } };
+  } else {
+    sceneRect = null; // set below
+    var topH = clamp(H * 0.24, 132, 260);
+    var btnH = clamp(H * 0.1, 58, 92), gap = pad * 0.6;
+    var btnY = H - pad - btnH * 2 - gap;
+    var bw = W - pad * 2;
+    btnRect.tap = { x: pad, y: btnY, w: bw, h: btnH };
+    btnRect.drone = { x: pad, y: btnY + btnH + gap, w: bw, h: btnH };
+    var midTop = topH, midBot = btnY - pad;
+    coreC = { x: W / 2, y: (midTop + midBot) / 2 };
+    coreBaseR = Math.min(W * 0.32, (midBot - midTop) * 0.42);
+    sceneRect = { x: 0, y: midTop, w: W, h: midBot - midTop };
+    var big2 = Math.min(W * 0.15, 64);
+    hud = { cx: W / 2, cy: topH * 0.5, big: big2, small: Math.min(W * 0.042, 17), iconGap: big2 * 0.5,
+            bar: { x: pad, y: topH - clamp(H * 0.03, 14, 22) - 6, w: W - pad * 2, h: clamp(H * 0.028, 12, 20) } };
+  }
+}
+window.addEventListener("resize", layout);
+window.addEventListener("orientationchange", function () { setTimeout(layout, 120); });
+
+// ---------------------------------------------------------------- ambiance -
+function initAmbiance() {
+  stars = [];
+  for (var i = 0; i < 60; i++) stars.push({ x: Math.random(), y: Math.random(), s: Math.random() < 0.8 ? 1 : 2, tw: 0.6 + Math.random() * 2, ph: Math.random() * 7 });
+  aurora = [
+    { col: "rgba(255,150,70,1)", rad: 0.6, sx: 0.06, sy: 0.05, px: 0, py: 1 },
+    { col: "rgba(120,90,255,1)", rad: 0.6, sx: 0.05, sy: 0.08, px: 2, py: 3 },
+    { col: "rgba(60,190,220,1)", rad: 0.5, sx: 0.07, sy: 0.04, px: 4, py: 0 }
+  ];
+}
+
+// ---------------------------------------------------------------- loop ----
+var last = 0;
+function frame(ts) {
+  if (!last) last = ts;
+  var dt = Math.min(0.05, (ts - last) / 1000); last = ts;
+  update(dt); render();
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- boot ----
+initAmbiance(); layout(); requestAnimationFrame(frame);
+
+/* ================================================================= *
+ *  AD-NETWORK / MRAID INTEGRATION HOOK
+ *  Networks (AppLovin, ironSource, Unity Ads, Mintegral…) inject the
+ *  store URL at serve time. Prefer MRAID when present; fall back to
+ *  window.open so it also runs standalone (this demo / double-click).
+ * ================================================================= */
+var STORE_URL = "https://example.com/get-stardust-foundry"; // placeholder — network overrides
+function redirect(url) {
+  url = url || STORE_URL;
+  try { if (typeof mraid !== "undefined" && mraid.open) { mraid.open(url); return; } } catch (e) {}
+  window.open(url, "_blank");
+}
+
+// tiny debug hook (harmless) for automated smoke-testing
+window.TF = {
+  state: function () { return state; },
+  stardust: function () { return Math.floor(stardust); },
+  ignite: function () { return IGNITE; },
+  lvl: function () { return { tap: lvl.tap, drone: lvl.drone, perSec: perSec }; },
+  tap: function () { harvest(coreC.x, coreC.y); },
+  buy: function (k) { return tryBuy(k); },
+  auto: function () { if (stardust >= costDrone(lvl.drone)) tryBuy("drone"); else if (stardust >= costTap(lvl.tap)) tryBuy("tap"); }
+};
+})();
+</script>
+</body>
+</html>

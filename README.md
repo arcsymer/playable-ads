@@ -10,7 +10,7 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 | Ad | Genre | Status | Live link | Size |
 |----|-------|--------|-----------|------|
 | **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **31 KB** |
-| Tycoon | Tap-to-earn & upgrade | 🚧 In progress | — | — |
+| **STARDUST FOUNDRY** | Tycoon (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **29 KB** |
 | Puzzle | One clean mechanic | 🚧 In progress | — | — |
 
 > These are **original prototypes to show the format**, not shipped campaigns. The
@@ -76,6 +76,33 @@ function redirect(url) {
 
 That's the whole integration surface: swap `STORE_URL` for the network's macro and the
 CTA is wired.
+
+## STARDUST FOUNDRY (tycoon) — live
+
+![STARDUST FOUNDRY gameplay](media/tycoon.gif)
+
+Tap the reactor core to harvest **Stardust**; spend it on two upgrades that both
+*visibly change the scene* — **Tap Yield** (each tap earns more) and **Collector
+Drones** (passive income, each drone appears orbiting the core). The per-second rate
+accelerates, the core grows and gains rings, the counter rolls up in abbreviated
+big-number form (`1.2K`, `1.8M`)… until you cross the **ignite** threshold → the star
+goes supernova → install CTA. Engaged play ignites in **~18 s**.
+
+- **The macro-over-micro loop, compressed:** tap → earn → upgrade → numbers accelerate →
+  milestone, in one screen.
+- **Juice:** floating `+N`, stardust motes that fly toward the counter, screen shake, a
+  rolling counter, an ignite flash + particle supernova, Web-Audio SFX with a rising
+  tap-pitch.
+- **Guided & unstuck:** an animated "TAP TO HARVEST" hand on the core; affordable
+  upgrades pulse on their own to pull you into the loop; a stronger hint after a few idle
+  seconds. Tapping always earns, so it can't soft-lock.
+- **Weight:** **~29 KB**, one HTML file, no assets.
+
+<p align="center"><img src="media/tycoon-portrait.png" width="240" alt="tap the core to harvest"> <img src="media/tycoon-endcard.png" width="240" alt="ignite the star — install CTA"></p>
+
+Same single-file Canvas skeleton as GLYPHFALL (responsive DPR canvas, delta-time loop,
+unified pointer input, state machine, procedural art, Web-Audio SFX) and the same MRAID /
+`redirect()` hook at the bottom of [`tycoon/index.html`](tycoon/index.html).
 
 ## Run it locally
 
