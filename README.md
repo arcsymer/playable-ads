@@ -9,10 +9,12 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 
 | Ad | Genre | Status | Live link | Size |
 |----|-------|--------|-----------|------|
-| **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **31 KB** |
-| **STARDUST FOUNDRY** | Clicker / Idle (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/clicker/) | **29 KB** |
-| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **29 KB** |
-| **NOVA NOODLES** | Tycoon / Management | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **35 KB** |
+| **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **32 KB** |
+| **STARDUST FOUNDRY** | Clicker / Idle (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/clicker/) | **30 KB** |
+| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **30 KB** |
+| **GRILL RUSH** | Tycoon / Management (isometric run-around) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **35 KB** |
+
+*All four use Web-Audio-generated SFX **plus a subtle muteable ambient pad** — no audio files.*
 
 > These are **original prototypes to show the format**, not shipped campaigns. The
 > operator has 5 Unity games + a TS/JS core stack but no prior shipped playable ads —
@@ -102,8 +104,8 @@ goes supernova → install CTA. Engaged play ignites in **~18 s**.
 <p align="center"><img src="media/clicker-portrait.png" width="240" alt="tap the core to harvest"> <img src="media/clicker-endcard.png" width="240" alt="ignite the star — install CTA"></p>
 
 > **Genre note:** this one is a **clicker / idle** ad (tap one object → upgrades → number
-> grows), not a management tycoon. It lives at `/clicker/`. The real manage-a-venue tycoon
-> is **NOVA NOODLES** below.
+> grows), not a management tycoon. It lives at `/clicker/`. The real tycoon is the
+> isometric run-around **GRILL RUSH** below.
 
 Same single-file Canvas skeleton as GLYPHFALL (responsive DPR canvas, delta-time loop,
 unified pointer input, state machine, procedural art, Web-Audio SFX) and the same MRAID /
@@ -133,38 +135,43 @@ then the install CTA.
 Same single-file Canvas skeleton and the same MRAID / `redirect()` hook at the bottom of
 [`puzzle/index.html`](puzzle/index.html).
 
-## NOVA NOODLES (tycoon) — live · *the real management tycoon*
+## GRILL RUSH (tycoon) — live · *the flagship — isometric run-around*
 
-![NOVA NOODLES gameplay](media/tycoon.gif)
+![GRILL RUSH gameplay](media/tycoon.gif)
 
-A genuine **manage-a-venue tycoon** (not a clicker): run a little space noodle stand.
-Travellers queue up, your **woks auto-cook** bowls, you **tap a ready wok to serve** the
-front traveller for coins — then **spend coins to grow the operation**: build more woks or
-cook faster. Throughput visibly rises as the stand expands, until you hit the milestone →
-**BUSINESS BOOMING!** → install CTA. Engaged play gets there in **~26 s** (typically
-growing to ~3 woks + 2 speed upgrades). See [`tycoon/DESIGN.md`](tycoon/DESIGN.md).
+A proper **isometric run-around tycoon** (the idle-runner genre): you **steer a chef** around
+a cosmic burger stand. Walk to the **grill** → a stack of burgers piles up on your back; run
+to the **counter** → the burgers sell to travellers and become a **cash stack**; carry the
+cash to a **build-pad** → drop it to construct a new station (a 2nd grill, a 2nd counter, a
+3rd grill). Build the whole venue → **BUSINESS BOOMING!** → install CTA. See
+[`tycoon/DESIGN.md`](tycoon/DESIGN.md).
 
-- **A real business loop**, compressed: queue fills → serve → earn → **build/upgrade** →
-  throughput rises → milestone. The satisfaction is *growing a stand*, not tapping one
-  object. The core decision is the classic **expand vs improve** trade-off (New Wok vs
-  Faster Cook).
-- **Guided & unstuck:** an animated "SERVE!" pointer on the first ready wok, then affordable
-  upgrades that pull you in; an inactivity auto-hint. There's **no fail state and no timer**
-  — the queue just grows and woks always keep cooking, so it can't soft-lock.
-- **Juice:** cute alien travellers sliding in/out with want-bubbles, wok cooking rings +
-  steam, a bowl arc-flying to each traveller, floating `+coins`, a rolling coin counter, a
-  "NEW WOK!" / "FASTER!" flash + particles, and a served/target progress bar.
-- **Weight:** **~35 KB** — more logic than the other ads (a queue, parallel stations, an
-  economy), still one HTML file with no assets, ~140× under the 5 MB ceiling.
+- **Isometric 2.5D on Canvas — no 3D engine.** Everything is an iso projection of a tile
+  grid, painter-sorted by depth so the chef passes correctly in front of / behind stations.
+  All art is **procedurally drawn** iso boxes / cylinders / stacked discs (an original
+  minimalist style — no external assets, no Three.js, which is what keeps it tiny).
+- **Run-around controls:** a **floating joystick** (drag anywhere to steer) with a
+  **follow-camera** so the venue fills the screen; stations act by proximity — no buttons to
+  hunt for.
+- **The whole courier loop:** cook → **carry a stack on your back** → sell → **drop money on
+  build-pads** → the venue visibly grows → milestone. Engaged play wins in **~30–40 s**.
+- **Guided & unstuck:** an animated arrow re-points to your next target (grill → counter →
+  nearest pad) as your hands fill and empty; inactivity auto-hint. **No fail / no timer**,
+  grills always cook, and there's always a pad to bank cash into — it can't soft-lock.
+- **Juice + sound:** stepping walk-cycle, stacks that grow/shrink on your back, coins that
+  pop off sold burgers, build-pads that fill + **poof** into a station with particles &
+  screen-shake, floating `+N`, a build progress bar, Web-Audio SFX **+ a muteable ambient
+  hum**.
+- **Weight:** **~35 KB** — an iso renderer + a courier economy in one HTML file with no
+  assets, still ~140× under the 5 MB ceiling.
 
-<p align="center"><img src="media/tycoon-portrait.png" width="240" alt="serve travellers from your woks"> <img src="media/tycoon-endcard.png" width="240" alt="business booming — install CTA"></p>
+<p align="center"><img src="media/tycoon-portrait.png" width="200" alt="steer the chef to the grill"> <img src="media/tycoon-carry.png" width="200" alt="carry a stack of burgers on your back"> <img src="media/tycoon-endcard.png" width="200" alt="business booming — install CTA"></p>
 
-Same single-file Canvas skeleton and the same MRAID / `redirect()` hook at the bottom of
-[`tycoon/index.html`](tycoon/index.html).
+Same MRAID / `redirect()` hook at the bottom of [`tycoon/index.html`](tycoon/index.html).
 
 > **Clicker vs tycoon:** [STARDUST FOUNDRY](#stardust-foundry-clicker--idle--live) (at
-> `/clicker/`) is the tap-one-object *clicker/idle* ad; **NOVA NOODLES** here (at
-> `/tycoon/`) is the *management* tycoon — place/upgrade stations and run a venue.
+> `/clicker/`) is the tap-one-object *clicker/idle* ad; **GRILL RUSH** here (at `/tycoon/`)
+> is the *management* tycoon — run a venue, carry stacks, and build stations to expand.
 
 ## Run it locally
 
