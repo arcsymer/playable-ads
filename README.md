@@ -11,7 +11,7 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 |----|-------|--------|-----------|------|
 | **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **32 KB** |
 | **STARDUST FOUNDRY** | Clicker / Idle (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/clicker/) | **30 KB** |
-| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **31 KB** |
+| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **32 KB** |
 | **GRILL RUSH** | Tycoon / Management (isometric run-around, warm diner) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **40 KB** |
 
 *All four use Web-Audio-generated SFX **plus a subtle muteable ambient pad** — no audio files.*
@@ -126,9 +126,11 @@ then the install CTA.
   solving move) — plus an **Undo** to back out of any dead-end. It cannot soft-lock.
 - **Accessible:** each colour carries a distinct **emblem** (circle / triangle / square /
   diamond), so it reads by shape as well as hue.
-- **Juice:** lifting/pouring vial animation with an arcing stream, a "seal" flare + chime
-  when a vial is completed, a level-clear flourish, particle finish, Web-Audio SFX.
-- **Weight:** **~29 KB**, one HTML file, no assets.
+- **Juice:** selecting a run lifts it as a rounded blob (eased, with a subtle bob); pouring
+  sends that blob **arcing up out of the vial neck, over, and settling into** the target vial
+  (clipped to the glass so it reads as *poured*, never snapped in). Plus a "seal" flare +
+  chime on a completed vial, a level-clear flourish, particle finish, Web-Audio SFX.
+- **Weight:** **~32 KB**, one HTML file, no assets.
 
 <p align="center"><img src="media/puzzle-portrait.png" width="240" alt="tap a vial then another to pour"> <img src="media/puzzle-endcard.png" width="240" alt="perfectly sorted — install CTA"></p>
 

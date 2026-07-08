@@ -34,7 +34,7 @@ var W = 0, H = 0;
 // ---------------------------------------------------------------- config ---
 var CAP = 4;                 // segments per vial
 var HINT_DELAY = 3.0;
-var POUR_MS = 420;
+var POUR_MS = 480;
 // level defs: [nColors, nEmpty, minSolveMoves]
 var LEVELS = [ [3, 2, 3], [4, 2, 5] ];
 
@@ -265,24 +265,25 @@ function drawSegment( intr, x, w, i, colorIdx, topOfRun) {
   if (topOfRun) { ctx.fillStyle = "rgba(255,255,255,0.28)"; ctx.fillRect(x, yTop, w, Math.max(2, intr.seg * 0.12)); }
   emblem(x + w / 2, yTop + intr.seg / 2, intr.seg * 0.2, c.em, 0.28);
 }
-function drawLiftedBlob(intr, x, w, ir, fromIdx, count, colorIdx, lift) {
-  var c = COLORS[colorIdx];
-  var yBottom = intr.bottom - fromIdx * intr.seg, h = count * intr.seg, yTop = yBottom - h - lift;
-  var rad = Math.min(ir, h / 2, w / 2);
+// a rounded liquid blob (a run of same-colour segments) — one shared style used by
+// both the selected/lifted run and the travelling pour, so it always reads as the
+// same rounded blob, never a hard square.
+function blobRect(x, yTop, w, h, seg, colorIdx, count) {
+  var c = COLORS[colorIdx], rad = Math.min(w * 0.42, h / 2, w / 2);
   ctx.save();
-  // soft drop-shadow sells the "popped up" feel
   ctx.shadowColor = "rgba(0,0,0,0.28)"; ctx.shadowBlur = w * 0.28; ctx.shadowOffsetY = 4;
   rr(x, yTop, w, h, rad);
   var g = ctx.createLinearGradient(0, yTop, 0, yTop + h); g.addColorStop(0, c.a); g.addColorStop(1, c.b);
   ctx.fillStyle = g; ctx.fill();
   ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-  // colour glow rim (same identity as the resting blob)
   rr(x, yTop, w, h, rad); ctx.strokeStyle = c.glow; ctx.globalAlpha = 0.5; ctx.lineWidth = Math.max(1.5, w * 0.045); ctx.stroke(); ctx.globalAlpha = 1;
-  // top highlight — identical to a resting top-of-run
-  ctx.save(); rr(x, yTop, w, h, rad); ctx.clip(); ctx.fillStyle = "rgba(255,255,255,0.28)"; ctx.fillRect(x, yTop, w, Math.max(2, intr.seg * 0.12)); ctx.restore();
-  // emblems, one per unit, same style as resting
-  for (var k = 0; k < count; k++) emblem(x + w / 2, yTop + h - (k + 0.5) * intr.seg, intr.seg * 0.2, c.em, 0.28);
+  ctx.save(); rr(x, yTop, w, h, rad); ctx.clip(); ctx.fillStyle = "rgba(255,255,255,0.28)"; ctx.fillRect(x, yTop, w, Math.max(2, seg * 0.12)); ctx.restore();
+  for (var k = 0; k < count; k++) emblem(x + w / 2, yTop + h - (k + 0.5) * seg, seg * 0.2, c.em, 0.28);
   ctx.restore();
+}
+function drawLiftedBlob(intr, x, w, ir, fromIdx, count, colorIdx, lift) {
+  var h = count * intr.seg, yTop = intr.bottom - fromIdx * intr.seg - h - lift;
+  blobRect(x, yTop, w, h, intr.seg, colorIdx, count);
 }
 function drawTube(idx) {
   var r = tubeRects[idx], t = tubes[idx], intr = tubeInterior(r);
@@ -333,32 +334,33 @@ function drawTube(idx) {
     ctx.restore();
   }
 }
+// the poured run travels as one rounded blob: it rises up OUT OF the source neck,
+// arcs across, then descends INTO the destination neck and settles in (clipped to the
+// vial so it reads as "poured in", never teleport-inserted).
 function drawPourAnim() {
   if (!anim) return;
-  var rd = tubeRects[anim.d], intr = tubeInterior(rd), c = COLORS[anim.color];
-  var baseCount = tubes[anim.d].length - anim.n;
-  var startX = anim.srcX, startY = anim.srcY;
-  var ctrlX = (startX + rd.x + rd.w / 2) / 2, ctrlY = Math.min(startY, rd.y) - rd.w * 0.6;
-  var stag = anim.n > 1 ? 0.5 / (anim.n - 1) : 0, band = 0.5;
-  for (var k = 0; k < anim.n; k++) {
-    var p = clamp((anim.t - (anim.n - 1 - k) * stag) / band, 0, 1);
-    var ez = 1 - (1 - p) * (1 - p);
-    var slotY = intr.bottom - (baseCount + k + 1) * intr.seg;
-    var ex = rd.x + rd.w * 0.1, ew = rd.w * 0.8;
-    var x = lerp(lerp(startX, ctrlX, ez), lerp(ctrlX, ex + ew / 2, ez), ez);
-    var y = lerp(lerp(startY, ctrlY, ez), lerp(ctrlY, slotY + intr.seg / 2, ez), ez);
-    ctx.save();
-    ctx.shadowColor = c.glow; ctx.shadowBlur = 14;
-    var g = ctx.createLinearGradient(0, y - intr.seg / 2, 0, y + intr.seg / 2);
-    g.addColorStop(0, c.a); g.addColorStop(1, c.b);
-    ctx.fillStyle = g;
-    if (p < 1) { ctx.beginPath(); ctx.arc(x, y, intr.seg * 0.42, 0, Math.PI * 2); ctx.fill(); }
-    else {
-      ctx.save(); ctx.beginPath(); rr(intr.x, intr.top, intr.w, intr.bottom - intr.top, intr.w * 0.42); ctx.clip();
-      ctx.fillRect(ex, slotY, ew, intr.seg + 0.5); ctx.restore();
-    }
-    ctx.restore();
+  var rs = tubeRects[anim.s], rd = tubeRects[anim.d];
+  var si = tubeInterior(rs), di = tubeInterior(rd);
+  var n = anim.n, h = n * di.seg, w = di.w;
+  var baseCount = tubes[anim.d].length - n;
+  var restTop = di.bottom - (baseCount + n) * di.seg;             // where the run settles in the dest
+  var srcCx = rs.x + rs.w / 2, destCx = rd.x + rd.w / 2;
+  var apex = Math.min(rs.y, rd.y) - Math.max(rd.w * 0.9, di.seg * 1.4); // clears both mouths
+  var t = clamp(anim.t, 0, 1), cx, topY, clipDest = false;
+  if (t < 0.30) {                                                 // rise up out of the source neck (ease-out)
+    var u = t / 0.30, e = 1 - (1 - u) * (1 - u);
+    cx = srcCx; topY = lerp(si.top, apex, e);
+  } else if (t < 0.62) {                                          // arc across, gentle hump
+    var u2 = (t - 0.30) / 0.32;
+    cx = lerp(srcCx, destCx, u2); topY = apex - Math.sin(u2 * Math.PI) * di.seg * 0.8;
+  } else {                                                        // descend into dest neck & settle (ease-in)
+    var u3 = (t - 0.62) / 0.38, e3 = u3 * u3;
+    cx = destCx; topY = lerp(apex, restTop, e3); clipDest = u3 > 0.12;
   }
+  ctx.save();
+  if (clipDest) { rr(di.x, di.top, di.w, di.bottom - di.top, di.w * 0.42); ctx.clip(); }
+  blobRect(cx - w / 2, topY, w, h, di.seg, anim.color, n);
+  ctx.restore();
 }
 
 function drawBackground() {
