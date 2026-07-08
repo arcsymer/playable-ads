@@ -63,12 +63,20 @@ var undoRect = null, muteRect = null, ctaRect = null, land = false;
 var stars = [], aurora = [];
 
 // ---------------------------------------------------------------- audio ----
-var actx = null, master = null;
+var actx = null, master = null, ambGain = null;
 function ensureAudio() {
   if (actx) { if (actx.state === "suspended") actx.resume(); return; }
   try { var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
     actx = new AC(); master = actx.createGain(); master.gain.value = 0.5; master.connect(actx.destination);
+    startAmbient();
   } catch (e) { actx = null; }
+}
+function startAmbient() { // subtle calm pad (muteable); generated, no audio files
+  if (!actx) return;
+  ambGain = actx.createGain(); ambGain.gain.value = muted ? 0 : 0.038; ambGain.connect(master);
+  var lp = actx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 680; lp.connect(ambGain);
+  [73.4, 110, 146.8].forEach(function (f, i) { var o = actx.createOscillator(); o.type = "sine"; o.frequency.value = f * (i === 1 ? 1.004 : 1); o.connect(lp); o.start(); });
+  var lfo = actx.createOscillator(), lg = actx.createGain(); lfo.frequency.value = 0.055; lg.gain.value = 0.016; lfo.connect(lg); lg.connect(ambGain.gain); lfo.start();
 }
 function tone(freq, dur, type, vol, delay) {
   if (!actx || muted) return;
@@ -485,7 +493,7 @@ function tubeAt(x, y) {
 }
 function onDown(x, y) {
   ensureAudio();
-  if (inRect(muteRect, x, y)) { muted = !muted; if (!muted) sfxSelect(); return; }
+  if (inRect(muteRect, x, y)) { muted = !muted; if (ambGain) ambGain.gain.value = muted ? 0 : 0.038; if (!muted) sfxSelect(); return; }
   if (state === "win") { if (inRect(ctaRect, x, y)) redirect(STORE_URL); return; }
   if (inRect(undoRect, x, y)) { doUndo(); return; }
   if (anim || transition) return;
