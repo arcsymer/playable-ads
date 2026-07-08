@@ -10,7 +10,7 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 | Ad | Genre | Status | Live link | Size |
 |----|-------|--------|-----------|------|
 | **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **31 KB** |
-| **STARDUST FOUNDRY** | Tycoon (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **29 KB** |
+| **STARDUST FOUNDRY** | Clicker / Idle (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/clicker/) | **29 KB** |
 | **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **29 KB** |
 
 > These are **original prototypes to show the format**, not shipped campaigns. The
@@ -77,9 +77,9 @@ function redirect(url) {
 That's the whole integration surface: swap `STORE_URL` for the network's macro and the
 CTA is wired.
 
-## STARDUST FOUNDRY (tycoon) — live
+## STARDUST FOUNDRY (clicker / idle) — live
 
-![STARDUST FOUNDRY gameplay](media/tycoon.gif)
+![STARDUST FOUNDRY gameplay](media/clicker.gif)
 
 Tap the reactor core to harvest **Stardust**; spend it on two upgrades that both
 *visibly change the scene* — **Tap Yield** (each tap earns more) and **Collector
@@ -98,11 +98,15 @@ goes supernova → install CTA. Engaged play ignites in **~18 s**.
   seconds. Tapping always earns, so it can't soft-lock.
 - **Weight:** **~29 KB**, one HTML file, no assets.
 
-<p align="center"><img src="media/tycoon-portrait.png" width="240" alt="tap the core to harvest"> <img src="media/tycoon-endcard.png" width="240" alt="ignite the star — install CTA"></p>
+<p align="center"><img src="media/clicker-portrait.png" width="240" alt="tap the core to harvest"> <img src="media/clicker-endcard.png" width="240" alt="ignite the star — install CTA"></p>
+
+> **Genre note:** this one is a **clicker / idle** ad (tap one object → upgrades → number
+> grows), not a management tycoon. It lives at `/clicker/`. The real manage-a-venue tycoon
+> is **NOVA NOODLES** below.
 
 Same single-file Canvas skeleton as GLYPHFALL (responsive DPR canvas, delta-time loop,
 unified pointer input, state machine, procedural art, Web-Audio SFX) and the same MRAID /
-`redirect()` hook at the bottom of [`tycoon/index.html`](tycoon/index.html).
+`redirect()` hook at the bottom of [`clicker/index.html`](clicker/index.html).
 
 ## PRISM POUR (puzzle) — live
 
