@@ -65,7 +65,7 @@ var props = [
   { wx: -0.75, wy: 3.6, type: "table" },
   { wx: 5.7, wy: 1.4, type: "table" },
   { wx: -0.75, wy: -0.6, type: "plant" },
-  { wx: 5.7, wy: 5.6, type: "plant" }
+  { wx: 5.7, wy: -0.6, type: "plant" }
 ];
 
 // ---------------------------------------------------------------- audio ----
@@ -480,17 +480,21 @@ function render() {
   drawBackground();
   ctx.save(); if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
   drawFloor();
-  // build a depth-sorted list of objects
+  // LAYER 1: purely-decorative props render BEHIND everything so they can never
+  // occlude gameplay actors (chef, customers, stacks, stations). Depth-sorted only
+  // among themselves.
+  var decor = props.slice().sort(function (a, b) { return (a.wx + a.wy) - (b.wx + b.wy); });
+  for (var i = 0; i < decor.length; i++) drawProp(decor[i]);
+  // LAYER 2: gameplay actors, depth-sorted among themselves, always on top of decor
   var objs = [];
-  for (var i = 0; i < pads.length; i++) if (!pads[i].done) objs.push({ d: pads[i].wx + pads[i].wy - 0.02, o: pads[i], t: "pad" });
+  for (i = 0; i < pads.length; i++) if (!pads[i].done) objs.push({ d: pads[i].wx + pads[i].wy - 0.02, o: pads[i], t: "pad" });
   for (i = 0; i < grills.length; i++) objs.push({ d: grills[i].wx + grills[i].wy, o: grills[i], t: "grill" });
   for (i = 0; i < counters.length; i++) objs.push({ d: counters[i].wx + counters[i].wy, o: counters[i], t: "counter" });
   for (i = 0; i < customers.length; i++) objs.push({ d: customers[i].wx + customers[i].wy, o: customers[i], t: "cust" });
-  for (i = 0; i < props.length; i++) objs.push({ d: props[i].wx + props[i].wy, o: props[i], t: "prop" });
   objs.push({ d: chef.wx + chef.wy, o: chef, t: "chef" });
   objs.sort(function (a, b) { return a.d - b.d; });
   for (i = 0; i < objs.length; i++) { var e = objs[i];
-    if (e.t === "pad") drawPad(e.o); else if (e.t === "grill") drawGrill(e.o); else if (e.t === "counter") drawCounter(e.o); else if (e.t === "cust") drawCustomer(e.o); else if (e.t === "prop") drawProp(e.o); else drawChef(); }
+    if (e.t === "pad") drawPad(e.o); else if (e.t === "grill") drawGrill(e.o); else if (e.t === "counter") drawCounter(e.o); else if (e.t === "cust") drawCustomer(e.o); else drawChef(); }
   drawGuide();
   // particles + floaters (screen space)
   ctx.save(); ctx.globalCompositeOperation = "lighter"; for (i = 0; i < particles.length; i++) { var p = particles[i]; ctx.globalAlpha = clamp(p.life / p.max, 0, 1); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill(); } ctx.restore(); ctx.globalAlpha = 1;
