@@ -3,11 +3,16 @@
 Replaces the previous static NOVA NOODLES tycoon with a proper **isometric run-around
 tycoon** — the idle-runner genre where you steer a character around a venue, pick up a
 stack of product, carry it to the counter for a stack of money, and drop that money on
-build-spots to expand. Original IP: theme, name (**GRILL RUSH** — a cosmic burger stand),
+build-spots to expand. Original IP: theme, name (**GRILL RUSH** — a warm, cozy burger diner),
 and **all art are procedurally drawn** (isometric boxes / cylinders / discs with shading —
 an original minimalist iso style, no external assets, no 3D engine). Mechanic is the
 generic idle-runner tycoon; nothing copied from any real game (and deliberately **not**
 pizza, to stay clearly distinct).
+
+> **Visual note (reskin):** the scene is a warm restaurant interior — light checkered
+> diner floor, warm sunlit walls, wood counter + cash register, tables & stools, potted
+> plants, a hanging menu sign, a steaming griddle, and a cook in an apron + hat. The
+> earlier space/cosmos palette was replaced; the run-around loop is unchanged.
 
 ## Isometric approach (2.5D, no 3D engine)
 - **Iso projection of a 2D tile grid.** World floor is an `N×M` tile grid; screen position

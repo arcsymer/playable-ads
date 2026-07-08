@@ -11,8 +11,8 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 |----|-------|--------|-----------|------|
 | **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **32 KB** |
 | **STARDUST FOUNDRY** | Clicker / Idle (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/clicker/) | **30 KB** |
-| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **30 KB** |
-| **GRILL RUSH** | Tycoon / Management (isometric run-around) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **35 KB** |
+| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **31 KB** |
+| **GRILL RUSH** | Tycoon / Management (isometric run-around, warm diner) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **40 KB** |
 
 *All four use Web-Audio-generated SFX **plus a subtle muteable ambient pad** — no audio files.*
 
@@ -139,11 +139,12 @@ Same single-file Canvas skeleton and the same MRAID / `redirect()` hook at the b
 
 ![GRILL RUSH gameplay](media/tycoon.gif)
 
-A proper **isometric run-around tycoon** (the idle-runner genre): you **steer a chef** around
-a cosmic burger stand. Walk to the **grill** → a stack of burgers piles up on your back; run
-to the **counter** → the burgers sell to travellers and become a **cash stack**; carry the
-cash to a **build-pad** → drop it to construct a new station (a 2nd grill, a 2nd counter, a
-3rd grill). Build the whole venue → **BUSINESS BOOMING!** → install CTA. See
+A proper **isometric run-around tycoon** (the idle-runner genre): you **steer a cook** around
+a warm, sunny **burger diner** — light checkered floor, wood counter, tables & potted plants,
+a steaming griddle, a hanging menu sign. Walk to the **grill** → a stack of burgers piles up
+on your back; run to the **counter** → the burgers sell to hungry diners and become a **cash
+stack**; carry the cash to a **build-pad** → drop it to construct a new station (a 2nd grill,
+a 2nd counter, a 3rd grill). Build the whole venue → **BUSINESS BOOMING!** → install CTA. See
 [`tycoon/DESIGN.md`](tycoon/DESIGN.md).
 
 - **Isometric 2.5D on Canvas — no 3D engine.** Everything is an iso projection of a tile
@@ -162,7 +163,7 @@ cash to a **build-pad** → drop it to construct a new station (a 2nd grill, a 2
   pop off sold burgers, build-pads that fill + **poof** into a station with particles &
   screen-shake, floating `+N`, a build progress bar, Web-Audio SFX **+ a muteable ambient
   hum**.
-- **Weight:** **~35 KB** — an iso renderer + a courier economy in one HTML file with no
+- **Weight:** **~40 KB** — an iso renderer + a courier economy + the warm-diner props in one HTML file with no
   assets, still ~140× under the 5 MB ceiling.
 
 <p align="center"><img src="media/tycoon-portrait.png" width="200" alt="steer the chef to the grill"> <img src="media/tycoon-carry.png" width="200" alt="carry a stack of burgers on your back"> <img src="media/tycoon-endcard.png" width="200" alt="business booming — install CTA"></p>

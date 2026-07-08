@@ -17,7 +17,7 @@
 <canvas id="game"></canvas>
 <script>
 /*  GRILL RUSH — a self-contained HTML5 ISOMETRIC run-around tycoon playable ad.
- *  Steer a chef around a cosmic burger stand: grab burgers from the grill onto your
+ *  Steer a cook around a warm little burger diner: grab burgers from the grill onto your
  *  back, carry them to the counter (they sell for a cash stack), drop cash on build
  *  pads to expand the venue — build it all to win. Isometric 2.5D on Canvas (NO 3D
  *  engine). Original IP: theme, names, and all art are procedural. MRAID/redirect
@@ -38,7 +38,9 @@ var CARRY_CAP = 8, PRICE = 3;
 var COOK_INT = 0.35, GRILL_CAP = 8;
 var XFER_INT = 0.08, SELL_INT = 0.10, DROP_INT = 0.05;
 var SPEED = 3.4, INTERACT = 0.95, HINT_DELAY = 3.0;
-var COIN = "#ffe08a", COIN2 = "#ffb02e", BUN = "#ffb64a", PATTY = "#7a4a2e", CASH = "#57d98a", CY = "#6be6ff", WARM = "#ff9d4a";
+var COIN = "#ffe08a", COIN2 = "#ffb02e", BUN = "#ffb64a", PATTY = "#7a4a2e", CASH = "#57d98a", CY = "#ffb454", WARM = "#ff9d4a";
+// warm restaurant palette (reskin)
+var FLOOR_A = "#efd2a6", FLOOR_B = "#e0bd86", WALL_TOP = "#ffe9c9", WALL_MID = "#f6cf98", WALL_BOT = "#e7b982", WOOD = "#b9793e", WOOD_D = "#8a5326", INK = "#7a3b12";
 var CUSTC = [["#ffb38f", "#ff7a4a"], ["#9fe0ff", "#3aa6ff"], ["#d7b6ff", "#9a5cff"], ["#a8f0b0", "#4bc76a"], ["#ffe39a", "#ffbe3a"], ["#ffb0d4", "#ff5c9a"]];
 
 // iso projection + follow camera (set in layout / update)
@@ -57,6 +59,14 @@ var shake = 0, flash = 0, T = 0, introFade = 4.2, muted = false, winTime = 0;
 var joy = { active: false, ox: 0, oy: 0, kx: 0, ky: 0 };
 var muteRect = null, ctaRect = null, land = false, hudH = 74;
 var stars = [], aurora = [];
+// static decorative restaurant props (world-space, depth-sorted, no gameplay role)
+var props = [
+  { wx: 2.5, wy: -0.85, type: "sign" },
+  { wx: -0.75, wy: 3.6, type: "table" },
+  { wx: 5.7, wy: 1.4, type: "table" },
+  { wx: -0.75, wy: -0.6, type: "plant" },
+  { wx: 5.7, wy: 5.6, type: "plant" }
+];
 
 // ---------------------------------------------------------------- audio ----
 var actx = null, master = null, ambGain = null;
@@ -238,12 +248,12 @@ function isoDiamond(wx, wy, s, color, stroke) {
 
 function drawFloor() {
   for (var wy = 0; wy < ROWS; wy++) for (var wx = 0; wx < COLS; wx++) {
-    isoDiamond(wx, wy, 0.98, (wx + wy) % 2 ? "#241a3a" : "#2b1f45", "rgba(255,255,255,0.04)");
+    isoDiamond(wx, wy, 0.98, (wx + wy) % 2 ? FLOOR_A : FLOOR_B, "rgba(120,70,30,0.10)");
   }
-  // rim
+  // warm rug border
   var c0 = toScreen(-0.5, -0.5), c1 = toScreen(COLS - 0.5, -0.5), c2 = toScreen(COLS - 0.5, ROWS - 0.5), c3 = toScreen(-0.5, ROWS - 0.5);
   ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y); ctx.lineTo(c2.x, c2.y); ctx.lineTo(c3.x, c3.y); ctx.closePath();
-  ctx.strokeStyle = "rgba(255,255,255,0.10)"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.strokeStyle = "rgba(120,70,30,0.28)"; ctx.lineWidth = 3; ctx.stroke();
 }
 
 function drawStack(sx, sy, n, kind) {
@@ -265,38 +275,89 @@ function drawStack(sx, sy, n, kind) {
 function drawGrill(g) {
   var lift = g.appear ? -g.appear * 20 : 0;
   ctx.save(); ctx.translate(0, lift);
-  isoBox(g.wx, g.wy, 0.62, TH * 0.7, "#5a6070", "#33384a", "#262a3a");
-  // hot plate
+  // warm stainless stove body
+  isoBox(g.wx, g.wy, 0.62, TH * 0.7, "#c6cad3", "#9398a6", "#787d8d");
   var b = toScreen(g.wx, g.wy); var py = b.y - TH * 0.7;
-  isoDiamond(g.wx, g.wy, 0.5, "#ff7a2a", null);
-  var gl = ctx.createRadialGradient(b.x, py, 0, b.x, py, TW * 0.3); gl.addColorStop(0, "rgba(255,180,90,0.5)"); gl.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(b.x, py, TW * 0.3, 0, Math.PI * 2); ctx.fill();
-  // ready burgers on plate
+  // dark griddle top with a hot glowing centre
+  isoDiamond(g.wx, g.wy, 0.5, "#3a3038", null);
+  isoDiamond(g.wx, g.wy, 0.4, "#ff8a38", null);
+  var gl = ctx.createRadialGradient(b.x, py, 0, b.x, py, TW * 0.32); gl.addColorStop(0, "rgba(255,180,90,0.6)"); gl.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(b.x, py, TW * 0.32, 0, Math.PI * 2); ctx.fill();
+  // steam wisps rising off the griddle
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (var s = 0; s < 3; s++) { var ph = (T * 0.9 + s * 0.66 + g.wx * 0.3) % 1; ctx.globalAlpha = (1 - ph) * 0.22; ctx.fillStyle = "#fff6e8";
+    ctx.beginPath(); ctx.arc(b.x + (s - 1) * TW * 0.12 + Math.sin(ph * 6 + s) * TW * 0.05, py - TH * 0.5 - ph * TH * 1.4, TW * 0.07 * (0.5 + ph), 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore(); ctx.globalAlpha = 1;
+  // ready burgers on the griddle
   drawStack(b.x, py - 2, Math.min(g.stock, 4), "burger");
   ctx.restore();
 }
 function drawCounter(c) {
   var lift = c.appear ? -c.appear * 20 : 0; ctx.save(); ctx.translate(0, lift);
-  isoBox(c.wx, c.wy, 0.7, TH * 0.6, "#c98a4a", "#8a5a2c", "#6e4622");
-  var b = toScreen(c.wx, c.wy); isoDiamond(c.wx, c.wy, 0.56, "#e0b070", null);
-  // till
-  isoBox(c.wx - 0.14, c.wy - 0.14, 0.22, TH * 0.5, "#4a5570", "#2e3547", "#242a3a");
+  // warm wood service counter
+  isoBox(c.wx, c.wy, 0.7, TH * 0.6, "#d69a54", "#a5682f", "#87531f");
+  var b = toScreen(c.wx, c.wy); isoDiamond(c.wx, c.wy, 0.56, "#eec089", null);
+  // cream cash register
+  isoBox(c.wx - 0.14, c.wy - 0.14, 0.22, TH * 0.5, "#ffe6b0", "#d9a760", "#bb8a48");
   void b; ctx.restore();
 }
 function drawPad(p) {
   var b = toScreen(p.wx, p.wy);
   if (p.done) return; // built -> station drawn instead
   var pr = 0.5 + 0.5 * Math.sin(T * 3);
-  isoDiamond(p.wx, p.wy, 0.62, "rgba(107,230,255,0.10)", "rgba(107,230,255," + (0.4 + pr * 0.4) + ")");
-  // fill ring
+  // warm amber ghost pad
+  isoDiamond(p.wx, p.wy, 0.62, "rgba(255,180,84,0.14)", "rgba(255,180,84," + (0.4 + pr * 0.4) + ")");
+  // fill ring (money filling it up)
   var frac = clamp(p.filled / p.cost, 0, 1);
-  ctx.strokeStyle = "rgba(255,255,255,0.15)"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(b.x, b.y - TH * 0.5, TW * 0.24, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = "rgba(120,70,30,0.22)"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(b.x, b.y - TH * 0.5, TW * 0.24, 0, Math.PI * 2); ctx.stroke();
   ctx.strokeStyle = CASH; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(b.x, b.y - TH * 0.5, TW * 0.24, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2); ctx.stroke();
-  // ghost of what builds
-  ctx.globalAlpha = 0.3; if (p.kind === "grill") isoBox(p.wx, p.wy, 0.5, TH * 0.55, "#6be6ff", "#3a8fb0", "#2a6a85"); else isoBox(p.wx, p.wy, 0.55, TH * 0.5, "#6be6ff", "#3a8fb0", "#2a6a85"); ctx.globalAlpha = 1;
+  // warm ghost of the station that will be built here
+  ctx.globalAlpha = 0.34; if (p.kind === "grill") isoBox(p.wx, p.wy, 0.5, TH * 0.55, "#ffcf8a", "#d19a58", "#a5682f"); else isoBox(p.wx, p.wy, 0.55, TH * 0.5, "#ffcf8a", "#d19a58", "#a5682f"); ctx.globalAlpha = 1;
   // cost label
-  ctx.fillStyle = "#fff"; ctx.font = "800 " + Math.min(TW * 0.2, 18) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = INK; ctx.font = "800 " + Math.min(TW * 0.2, 18) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText("BUILD", b.x, b.y - TH * 0.5 - TW * 0.02);
+}
+function drawProp(p) { if (p.type === "sign") drawSign(p); else if (p.type === "table") drawTable(p); else drawPlant(p); }
+function drawBurgerIcon(x, y, r) {
+  ctx.fillStyle = BUN; ctx.beginPath(); ctx.arc(x, y - r * 0.45, r, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = "#5bbf5b"; ctx.fillRect(x - r, y - r * 0.12, r * 2, r * 0.18);
+  ctx.fillStyle = PATTY; ctx.fillRect(x - r, y + r * 0.06, r * 2, r * 0.24);
+  ctx.fillStyle = BUN; rr(x - r, y + r * 0.28, r * 2, r * 0.4, r * 0.28); ctx.fill();
+}
+function drawSign(p) {
+  var b = toScreen(p.wx, p.wy);
+  isoBox(p.wx, p.wy, 0.09, TH * 2.2, WOOD_D, "#6e4220", "#5a3618");
+  var by = b.y - TH * 2.2 - TW * 0.4, bw = TW * 1.55, bh = TW * 0.78, bx = b.x;
+  ctx.save(); ctx.shadowColor = "rgba(0,0,0,0.22)"; ctx.shadowBlur = 8;
+  rr(bx - bw / 2, by - bh / 2, bw, bh, TW * 0.12);
+  var g = ctx.createLinearGradient(0, by - bh / 2, 0, by + bh / 2); g.addColorStop(0, "#fff3dc"); g.addColorStop(1, "#ffdfae");
+  ctx.fillStyle = g; ctx.fill(); ctx.restore();
+  ctx.strokeStyle = WOOD; ctx.lineWidth = 3; rr(bx - bw / 2, by - bh / 2, bw, bh, TW * 0.12); ctx.stroke();
+  drawBurgerIcon(bx - bw * 0.32, by, TW * 0.15);
+  ctx.fillStyle = "#8a3b12"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.font = "800 " + TW * 0.19 + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("GRILL", bx + bw * 0.14, by - bh * 0.17); ctx.fillText("RUSH", bx + bw * 0.14, by + bh * 0.17);
+}
+function drawTable(p) {
+  var b = toScreen(p.wx, p.wy);
+  // stools first (behind)
+  [-0.6, 0.6].forEach(function (dx) { var sx = b.x + dx * TW * 0.42, sy = b.y - TH * 0.05;
+    ctx.fillStyle = "rgba(0,0,0,0.18)"; ctx.beginPath(); ctx.ellipse(sx, sy + 3, TW * 0.13, TH * 0.13, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = WOOD_D; ctx.fillRect(sx - TW * 0.02, sy - TH * 0.4, TW * 0.04, TH * 0.4);
+    ctx.fillStyle = "#c96f3a"; ctx.beginPath(); ctx.ellipse(sx, sy - TH * 0.4, TW * 0.14, TH * 0.14, 0, 0, Math.PI * 2); ctx.fill(); });
+  // pedestal + round table top
+  isoBox(p.wx, p.wy, 0.1, TH * 0.75, "#a5682f", "#7c4d22", "#653f1c");
+  var ty = b.y - TH * 0.75;
+  ctx.fillStyle = "#a5682f"; ctx.beginPath(); ctx.ellipse(b.x, ty + 3, TW * 0.34, TH * 0.34, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#d99a56"; ctx.beginPath(); ctx.ellipse(b.x, ty, TW * 0.33, TH * 0.33, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#eec089"; ctx.beginPath(); ctx.ellipse(b.x - TW * 0.06, ty - TH * 0.05, TW * 0.14, TH * 0.13, 0, 0, Math.PI * 2); ctx.fill();
+}
+function drawPlant(p) {
+  var b = toScreen(p.wx, p.wy);
+  ctx.fillStyle = "rgba(0,0,0,0.18)"; ctx.beginPath(); ctx.ellipse(b.x, b.y + 3, TW * 0.2, TH * 0.2, 0, 0, Math.PI * 2); ctx.fill();
+  isoBox(p.wx, p.wy, 0.17, TH * 0.42, "#c96f3a", "#9a5228", "#7e4220");
+  var ty = b.y - TH * 0.42;
+  ctx.fillStyle = "#3f8f3f"; [[-0.5, -0.5], [0.5, -0.5], [0, -0.35]].forEach(function (o) { ctx.beginPath(); ctx.arc(b.x + o[0] * TW * 0.22, ty + o[1] * TH * 1.1, TW * 0.17, 0, Math.PI * 2); ctx.fill(); });
+  ctx.fillStyle = "#57b657"; [[-0.25, -0.95], [0.3, -0.9], [0, -1.25]].forEach(function (o) { ctx.beginPath(); ctx.arc(b.x + o[0] * TW * 0.22, ty + o[1] * TH * 1.1, TW * 0.15, 0, Math.PI * 2); ctx.fill(); });
 }
 function drawCustomer(c) {
   var s = toScreen(c.wx, c.wy), r = TW * 0.14, a = c.state === "leave" ? clamp(1 - c.tLeave / 0.6, 0, 1) : 1;
@@ -317,7 +378,7 @@ function drawChef() {
   // back stack (behind body, drawn slightly up-left)
   drawStack(s.x - chef.face * r * 0.5, y - r * 1.7, chef.carryB > 0 ? chef.carryB : chef.carryC, chef.carryB > 0 ? "burger" : "cash");
   // feet
-  ctx.fillStyle = "#3a2a5a"; ctx.beginPath(); ctx.ellipse(s.x - r * 0.35, y - step * 0 + step, r * 0.3, r * 0.16, 0, 0, Math.PI * 2); ctx.ellipse(s.x + r * 0.35, y - step, r * 0.3, r * 0.16, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#6e4526"; ctx.beginPath(); ctx.ellipse(s.x - r * 0.35, y - step * 0 + step, r * 0.3, r * 0.16, 0, 0, Math.PI * 2); ctx.ellipse(s.x + r * 0.35, y - step, r * 0.3, r * 0.16, 0, 0, Math.PI * 2); ctx.fill();
   // body (apron)
   rr(s.x - r * 0.75, y - r * 2.0, r * 1.5, r * 2.0, r * 0.55); var bg = ctx.createLinearGradient(0, y - r * 2, 0, y); bg.addColorStop(0, "#ffd9a8"); bg.addColorStop(0.5, "#ff9d4a"); bg.addColorStop(1, "#ff8a2b"); ctx.fillStyle = bg; ctx.shadowColor = "rgba(255,150,60,0.4)"; ctx.shadowBlur = 8; ctx.fill(); ctx.shadowBlur = 0;
   // head
@@ -349,14 +410,20 @@ function drawGuide() {
 }
 
 function drawBackground() {
-  var g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#140d28"); g.addColorStop(0.55, "#0c0819"); g.addColorStop(1, "#07050f");
+  // warm interior wall fading to a warm floor tone
+  var g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, WALL_TOP); g.addColorStop(0.5, WALL_MID); g.addColorStop(1, WALL_BOT);
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // soft warm sunlight from the top-right (like a sunny window)
+  var sg = ctx.createRadialGradient(W * 0.82, H * 0.1, 0, W * 0.82, H * 0.1, Math.max(W, H) * 0.75);
+  sg.addColorStop(0, "rgba(255,244,208,0.55)"); sg.addColorStop(1, "rgba(255,244,208,0)");
+  ctx.fillStyle = sg; ctx.fillRect(0, 0, W, H);
+  // faint wainscoting line on the back wall
+  ctx.fillStyle = "rgba(150,95,50,0.12)"; ctx.fillRect(0, H * 0.17, W, Math.max(2, H * 0.01));
+  // soft drifting warm light pools
   ctx.save(); ctx.globalCompositeOperation = "lighter";
-  for (var i = 0; i < aurora.length; i++) { var au = aurora[i]; var x = W * (0.5 + 0.42 * Math.sin(T * au.sx + au.px)), y = H * (0.4 + 0.3 * Math.cos(T * au.sy + au.py)), rad = au.rad * Math.min(W, H);
-    var rg = ctx.createRadialGradient(x, y, 0, x, y, rad); rg.addColorStop(0, au.col); rg.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = rg; ctx.globalAlpha = 0.15; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill(); }
-  ctx.restore();
-  for (i = 0; i < stars.length; i++) { var s = stars[i]; ctx.globalAlpha = (0.4 + 0.6 * (0.5 + 0.5 * Math.sin(T * s.tw + s.ph))) * 0.7; ctx.fillStyle = "#cfe0ff"; ctx.fillRect(s.x * W, s.y * H, s.s, s.s); }
-  ctx.globalAlpha = 1;
+  for (var i = 0; i < aurora.length; i++) { var au = aurora[i]; var x = W * (0.5 + 0.4 * Math.sin(T * au.sx + au.px)), y = H * (0.35 + 0.28 * Math.cos(T * au.sy + au.py)), rad = au.rad * Math.min(W, H);
+    var rg = ctx.createRadialGradient(x, y, 0, x, y, rad); rg.addColorStop(0, au.col); rg.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = rg; ctx.globalAlpha = 0.11; ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore(); ctx.globalAlpha = 1;
 }
 
 function drawHUD() {
@@ -365,20 +432,20 @@ function drawHUD() {
   ctx.font = "800 " + big + "px -apple-system,Segoe UI,Roboto,sans-serif";
   var txt = fmt(dispEarned), icr = big * 0.36, pop = 1 + coinPop * 0.16;
   ctx.save(); ctx.translate(14 + icr, hudH * 0.36); ctx.scale(pop, pop); coinIcon(0, 0, icr);
-  ctx.textAlign = "left"; ctx.fillStyle = "#fff7e6"; ctx.shadowColor = COIN; ctx.shadowBlur = 12; ctx.fillText(txt, icr + big * 0.3, 0); ctx.restore(); ctx.shadowBlur = 0;
-  ctx.textAlign = "right"; ctx.fillStyle = "#eef1ff"; ctx.font = "800 " + big * 0.8 + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText("GRILL RUSH", W - 46, hudH * 0.36);
+  ctx.textAlign = "left"; ctx.fillStyle = "#5a3410"; ctx.shadowBlur = 0; ctx.fillText(txt, icr + big * 0.3, 0); ctx.restore(); ctx.shadowBlur = 0;
+  ctx.textAlign = "right"; ctx.fillStyle = "#8a3b12"; ctx.font = "800 " + big * 0.8 + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText("GRILL RUSH", W - 46, hudH * 0.36);
   // build progress
   var pb = { x: 14, y: hudH * 0.74, w: W - 28, h: clamp(hudH * 0.14, 9, 16) };
-  rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2); ctx.fillStyle = "rgba(255,255,255,0.1)"; ctx.fill();
+  rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2); ctx.fillStyle = "rgba(120,70,30,0.16)"; ctx.fill();
   var pr = clamp(totalFilled() / totalCost(), 0, 1);
   if (pr > 0.001) { ctx.save(); rr(pb.x, pb.y, pb.w, pb.h, pb.h / 2); ctx.clip(); var g = ctx.createLinearGradient(pb.x, 0, pb.x + pb.w, 0); g.addColorStop(0, CASH); g.addColorStop(0.6, COIN); g.addColorStop(1, "#ff6bb0"); ctx.fillStyle = g; ctx.fillRect(pb.x, pb.y, pb.w * pr, pb.h); ctx.restore(); }
-  ctx.fillStyle = "#c7cdf0"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.font = "600 " + big * 0.5 + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = "#7a4a24"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic"; ctx.font = "600 " + big * 0.5 + "px -apple-system,Segoe UI,Roboto,sans-serif";
   ctx.fillText("Build the venue  " + pads.filter(function (p) { return p.done; }).length + " / " + pads.length, pb.x + 2, pb.y - pb.h * 0.6);
   // mute
   var ms = clamp(hudH * 0.34, 20, 26); muteRect = { x: W - ms - 12, y: hudH * 0.36 - ms / 2, w: ms, h: ms };
-  ctx.save(); ctx.translate(muteRect.x + ms / 2, muteRect.y + ms / 2); ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.save(); ctx.translate(muteRect.x + ms / 2, muteRect.y + ms / 2); ctx.fillStyle = "rgba(110,64,30,0.62)";
   ctx.beginPath(); ctx.moveTo(-ms * 0.35, -ms * 0.14); ctx.lineTo(-ms * 0.1, -ms * 0.14); ctx.lineTo(ms * 0.1, -ms * 0.32); ctx.lineTo(ms * 0.1, ms * 0.32); ctx.lineTo(-ms * 0.1, ms * 0.14); ctx.lineTo(-ms * 0.35, ms * 0.14); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = Math.max(1.5, ms * 0.08); ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(110,64,30,0.62)"; ctx.lineWidth = Math.max(1.5, ms * 0.08); ctx.lineCap = "round";
   if (muted) { ctx.beginPath(); ctx.moveTo(ms * 0.2, -ms * 0.2); ctx.lineTo(ms * 0.44, ms * 0.2); ctx.moveTo(ms * 0.44, -ms * 0.2); ctx.lineTo(ms * 0.2, ms * 0.2); ctx.stroke(); }
   else { ctx.beginPath(); ctx.arc(ms * 0.16, 0, ms * 0.2, -0.6, 0.6); ctx.stroke(); ctx.beginPath(); ctx.arc(ms * 0.16, 0, ms * 0.36, -0.6, 0.6); ctx.stroke(); }
   ctx.restore();
@@ -419,10 +486,11 @@ function render() {
   for (i = 0; i < grills.length; i++) objs.push({ d: grills[i].wx + grills[i].wy, o: grills[i], t: "grill" });
   for (i = 0; i < counters.length; i++) objs.push({ d: counters[i].wx + counters[i].wy, o: counters[i], t: "counter" });
   for (i = 0; i < customers.length; i++) objs.push({ d: customers[i].wx + customers[i].wy, o: customers[i], t: "cust" });
+  for (i = 0; i < props.length; i++) objs.push({ d: props[i].wx + props[i].wy, o: props[i], t: "prop" });
   objs.push({ d: chef.wx + chef.wy, o: chef, t: "chef" });
   objs.sort(function (a, b) { return a.d - b.d; });
   for (i = 0; i < objs.length; i++) { var e = objs[i];
-    if (e.t === "pad") drawPad(e.o); else if (e.t === "grill") drawGrill(e.o); else if (e.t === "counter") drawCounter(e.o); else if (e.t === "cust") drawCustomer(e.o); else drawChef(); }
+    if (e.t === "pad") drawPad(e.o); else if (e.t === "grill") drawGrill(e.o); else if (e.t === "counter") drawCounter(e.o); else if (e.t === "cust") drawCustomer(e.o); else if (e.t === "prop") drawProp(e.o); else drawChef(); }
   drawGuide();
   // particles + floaters (screen space)
   ctx.save(); ctx.globalCompositeOperation = "lighter"; for (i = 0; i < particles.length; i++) { var p = particles[i]; ctx.globalAlpha = clamp(p.life / p.max, 0, 1); ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill(); } ctx.restore(); ctx.globalAlpha = 1;
@@ -431,7 +499,7 @@ function render() {
 
   drawHUD(); drawJoystick();
   if (introFade > 0 && state === "play") { ctx.globalAlpha = clamp(introFade, 0, 1) * 0.9; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.font = "600 " + Math.min(W * 0.045, 20) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillStyle = "#dfe4ff"; ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+    ctx.font = "700 " + Math.min(W * 0.045, 20) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillStyle = "#6e3a12"; ctx.shadowColor = "rgba(255,248,230,0.7)"; ctx.shadowBlur = 6;
     ctx.fillText("Drag to move • grill → counter → build pads", W / 2, H - 24); ctx.shadowBlur = 0; ctx.globalAlpha = 1; }
   if (flash > 0) { ctx.fillStyle = "rgba(255,240,210," + flash * 0.6 + ")"; ctx.fillRect(0, 0, W, H); }
   if (state === "win") drawEndCard();
@@ -474,8 +542,8 @@ window.addEventListener("orientationchange", function () { setTimeout(layout, 12
 
 // ---------------------------------------------------------------- ambiance -
 function initAmbiance() {
-  stars = []; for (var i = 0; i < 55; i++) stars.push({ x: Math.random(), y: Math.random(), s: Math.random() < 0.8 ? 1 : 2, tw: 0.6 + Math.random() * 2, ph: Math.random() * 7 });
-  aurora = [{ col: "rgba(255,150,70,1)", rad: 0.6, sx: 0.06, sy: 0.05, px: 0, py: 1 }, { col: "rgba(150,90,255,1)", rad: 0.6, sx: 0.05, sy: 0.08, px: 2, py: 3 }, { col: "rgba(60,200,220,1)", rad: 0.5, sx: 0.07, sy: 0.04, px: 4, py: 0 }];
+  stars = []; // no starfield in the restaurant reskin — warm light pools only
+  aurora = [{ col: "rgba(255,214,150,1)", rad: 0.55, sx: 0.05, sy: 0.04, px: 0, py: 1 }, { col: "rgba(255,178,110,1)", rad: 0.5, sx: 0.04, sy: 0.06, px: 2, py: 3 }, { col: "rgba(255,236,196,1)", rad: 0.45, sx: 0.06, sy: 0.03, px: 4, py: 0 }];
 }
 
 // ---------------------------------------------------------------- loop ----
