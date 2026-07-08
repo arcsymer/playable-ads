@@ -1,0 +1,832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>GLYPHFALL — Match-3 Playable Ad</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#080611; }
+  body {
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color:transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  canvas { display:block; position:fixed; inset:0; touch-action:none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+/*  GLYPHFALL — a self-contained HTML5 match-3 playable ad prototype.
+ *  Original IP: theme, names ("aurora runes"), and all art are procedural.
+ *  No external files, no runtime deps — everything is inline + generated.
+ *
+ *  Ad-network integration hook lives at the bottom (see redirect() / MRAID).
+ */
+(function () {
+"use strict";
+
+// ---------------------------------------------------------------- canvas ---
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var DPR = Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+var W = 0, H = 0;
+
+// ---------------------------------------------------------------- config ---
+var GRID = 6;
+var TARGET_SCORE = 800;    // charge the rune -> win + CTA
+var CLEAR_MS = 190;        // clear-pop duration
+var HINT_DELAY = 3.2;      // seconds of inactivity before a hint
+var LERP = 16;             // tile movement snappiness
+
+// Original rune set: distinct SHAPE + COLOR (colour-blind friendly).
+var TYPES = [
+  { name:"Ember",    a:"#ffcf8a", b:"#ff5a2c", glow:"#ff7a3a" }, // 0 flame
+  { name:"Tide",     a:"#a9e2ff", b:"#2f7bff", glow:"#3aa6ff" }, // 1 droplet
+  { name:"Verdant",  a:"#c8f985", b:"#33c657", glow:"#4ad86a" }, // 2 leaf
+  { name:"Solar",    a:"#ffe98a", b:"#ffab1f", glow:"#ffca38" }, // 3 star
+  { name:"Amethyst", a:"#eeb6ff", b:"#9b40ff", glow:"#c46bff" }, // 4 crystal
+  { name:"Frost",    a:"#c2fff5", b:"#2fc4d6", glow:"#5ef0e6" }  // 5 snowflake
+];
+var NT = TYPES.length;
+
+// ---------------------------------------------------------------- state ----
+var state = "play";          // "play" | "win"
+var grid = [];               // grid[r][c] = tile | null
+var clearing = [];           // popping tiles
+var particles = [];
+var floaters = [];
+var anim = null;             // {phase, ...}
+var combo = 0;
+var score = 0;
+var movesMade = 0;
+var sel = null;              // selected tile {r,c}
+var dragStart = null;
+var dragging = false;
+var guiding = true;          // guided first move
+var guideHint = null;
+var hint = null;             // inactivity hint
+var idleTimer = 0;
+var T = 0;                   // global time accumulator
+var shake = 0;
+var winTime = 0;
+var introFade = 3.4;         // "Swap runes • match 3+" tagline timer
+var muted = false;
+var ctaRect = null, muteRect = null;
+
+// layout (px)
+var boardX = 0, boardY = 0, boardSize = 0, tile = 0, hudH = 0;
+
+// starfield / aurora ambiance
+var stars = [];
+var aurora = [];
+
+// ---------------------------------------------------------------- audio ----
+var actx = null, master = null;
+function ensureAudio() {
+  if (actx) { if (actx.state === "suspended") actx.resume(); return; }
+  try {
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    actx = new AC();
+    master = actx.createGain();
+    master.gain.value = 0.5;
+    master.connect(actx.destination);
+  } catch (e) { actx = null; }
+}
+function tone(freq, dur, type, vol, delay) {
+  if (!actx || muted) return;
+  var t0 = actx.currentTime + (delay || 0);
+  var o = actx.createOscillator();
+  var g = actx.createGain();
+  o.type = type || "sine";
+  o.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol || 0.3, t0 + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function sfxPop(c)  { tone(300 + c * 55, 0.16, "triangle", 0.28); tone(600 + c * 90, 0.10, "sine", 0.14, 0.01); }
+function sfxSwap()  { tone(220, 0.09, "sine", 0.18); }
+function sfxBad()   { tone(150, 0.12, "sawtooth", 0.12); }
+function sfxWin()   { [523, 659, 784, 1046].forEach(function (f, i) { tone(f, 0.5, "triangle", 0.3, i * 0.12); }); }
+
+// ---------------------------------------------------------------- util -----
+function ri(n) { return (Math.random() * n) | 0; }
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function cellCenter(r, c) { return { x: boardX + c * tile + tile / 2, y: boardY + r * tile + tile / 2 }; }
+
+// ---------------------------------------------------------------- tiles ----
+function makeTile(type, r, c, startY) {
+  var p = cellCenter(r, c);
+  return { type: type, r: r, c: c, x: p.x, y: (startY == null ? p.y : startY), tx: p.x, ty: p.y, pulse: 0 };
+}
+function retarget(t) { var p = cellCenter(t.r, t.c); t.tx = p.x; t.ty = p.y; }
+
+function pickInitType(r, c) {
+  var bad = {};
+  if (c >= 2 && grid[r][c-1].type === grid[r][c-2].type) bad[grid[r][c-1].type] = 1;
+  if (r >= 2 && grid[r-1][c].type === grid[r-2][c].type) bad[grid[r-1][c].type] = 1;
+  var t;
+  do { t = ri(NT); } while (bad[t]);
+  return t;
+}
+function newBoard() {
+  grid = [];
+  for (var r = 0; r < GRID; r++) {
+    grid[r] = [];
+    for (var c = 0; c < GRID; c++) grid[r][c] = makeTile(0, r, c);
+  }
+  for (r = 0; r < GRID; r++) for (var c2 = 0; c2 < GRID; c2++) grid[r][c2].type = pickInitType(r, c2);
+  var guard = 0;
+  while (!findHint() && guard++ < 50) {
+    for (r = 0; r < GRID; r++) for (c2 = 0; c2 < GRID; c2++) grid[r][c2].type = pickInitType(r, c2);
+  }
+  guideHint = findHint();
+}
+
+// ---------------------------------------------------------- match finding --
+function collectRuns(getType, set) {
+  // rows
+  for (var r = 0; r < GRID; r++) {
+    var run = 1;
+    for (var c = 1; c <= GRID; c++) {
+      if (c < GRID && getType(r, c) === getType(r, c - 1) && getType(r, c) >= 0) run++;
+      else { if (run >= 3) for (var k = 1; k <= run; k++) set["" + r + "," + (c - k)] = 1; run = 1; }
+    }
+  }
+  // cols
+  for (c = 0; c < GRID; c++) {
+    run = 1;
+    for (r = 1; r <= GRID; r++) {
+      if (r < GRID && getType(r, c) === getType(r - 1, c) && getType(r, c) >= 0) run++;
+      else { if (run >= 3) for (k = 1; k <= run; k++) set["" + (r - k) + "," + c] = 1; run = 1; }
+    }
+  }
+}
+function tileType(r, c) { var t = grid[r][c]; return t ? t.type : -1; }
+function findMatches() {
+  var set = {};
+  collectRuns(tileType, set);
+  return set;
+}
+function countKeys(o) { var n = 0; for (var k in o) if (o.hasOwnProperty(k)) n++; return n; }
+
+function swapMakesMatch(r1, c1, r2, c2) {
+  var A = grid[r1][c1], B = grid[r2][c2];
+  if (!A || !B) return false;
+  var t = A.type; A.type = B.type; B.type = t;
+  var has = countKeys(findMatches()) > 0;
+  t = A.type; A.type = B.type; B.type = t;
+  return has;
+}
+function findHint() {
+  for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) {
+    if (c < GRID - 1 && swapMakesMatch(r, c, r, c + 1)) return { a: { r: r, c: c }, b: { r: r, c: c + 1 } };
+    if (r < GRID - 1 && swapMakesMatch(r, c, r + 1, c)) return { a: { r: r, c: c }, b: { r: r + 1, c: c } };
+  }
+  return null;
+}
+
+// ------------------------------------------------------------- resolution --
+function adjacent(a, b) { return (a.r === b.r && Math.abs(a.c - b.c) === 1) || (a.c === b.c && Math.abs(a.r - b.r) === 1); }
+
+function swapCells(a, b) {
+  var ta = grid[a.r][a.c], tb = grid[b.r][b.c];
+  grid[a.r][a.c] = tb; grid[b.r][b.c] = ta;
+  ta.r = b.r; ta.c = b.c; tb.r = a.r; tb.c = a.c;
+  retarget(ta); retarget(tb);
+}
+function beginSwap(a, b) {
+  guiding = false; hint = null; idleTimer = 0; sel = null; introFade = Math.min(introFade, 0.3);
+  swapCells(a, b);
+  anim = { phase: "swap", a: a, b: b };
+  movesMade++;
+  sfxSwap();
+}
+
+function doClear(cells) {
+  combo++;
+  var gained = 0, cx = 0, cy = 0, n = 0;
+  for (var key in cells) {
+    if (!cells.hasOwnProperty(key)) continue;
+    var p = key.split(","), r = +p[0], c = +p[1];
+    var t = grid[r][c];
+    if (!t) continue;
+    grid[r][c] = null;
+    var pts = 30 * combo;
+    gained += pts; cx += t.x; cy += t.y; n++;
+    clearing.push({ x: t.x, y: t.y, type: t.type, t: 0 });
+    spawnBurst(t.x, t.y, TYPES[t.type].glow, 8 + Math.min(6, combo));
+  }
+  score += gained;
+  if (n) { floaters.push({ x: cx / n, y: cy / n, text: "+" + gained, t: 0, dur: 0.9, color: "#ffffff", size: Math.min(tile * 0.5, 34) }); }
+  if (combo >= 2) {
+    floaters.push({ x: W / 2, y: boardY - hudH * 0.05, text: "COMBO x" + combo, t: 0, dur: 0.9, color: TYPES[ri(NT)].glow, size: Math.min(W * 0.09, 46) });
+  }
+  shake = Math.min(14, shake + 3 + combo * 1.5);
+  sfxPop(combo);
+  anim = { phase: "clear", timer: CLEAR_MS };
+}
+
+function collapse() {
+  for (var c = 0; c < GRID; c++) {
+    var write = GRID - 1;
+    for (var r = GRID - 1; r >= 0; r--) {
+      if (grid[r][c]) {
+        if (r !== write) { var t = grid[r][c]; grid[write][c] = t; grid[r][c] = null; t.r = write; t.c = c; retarget(t); }
+        write--;
+      }
+    }
+    var extra = 0;
+    for (r = write; r >= 0; r--) {
+      var nt = makeTile(ri(NT), r, c, cellCenter(-1 - extra, c).y);
+      grid[r][c] = nt; extra++;
+    }
+  }
+}
+
+function allSettled() {
+  for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) {
+    var t = grid[r][c];
+    if (t && (Math.abs(t.x - t.tx) > 0.6 || Math.abs(t.y - t.ty) > 0.6)) return false;
+  }
+  return true;
+}
+
+function endCascade() {
+  combo = 0;
+  if (score >= TARGET_SCORE) { win(); return; }
+  state = "play"; anim = null; sel = null; idleTimer = 0;
+  if (!findHint()) reshuffle();
+}
+function reshuffle() {
+  var guard = 0;
+  do {
+    for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) grid[r][c].type = pickInitType(r, c);
+  } while ((!findHint() || countKeys(findMatches())) && guard++ < 60);
+  shake = Math.min(12, shake + 6);
+  sfxSwap();
+}
+
+function win() {
+  state = "win"; winTime = 0; anim = null; guiding = false; hint = null;
+  sfxWin();
+  for (var i = 0; i < 90; i++) {
+    var col = TYPES[ri(NT)].glow;
+    particles.push({ x: W / 2 + (Math.random() - 0.5) * W * 0.4, y: H * 0.42, vx: (Math.random() - 0.5) * 380, vy: -Math.random() * 420 - 60, life: 1.4 + Math.random(), max: 2.4, color: col, size: 3 + Math.random() * 4, g: 520 });
+  }
+}
+
+function spawnBurst(x, y, color, n) {
+  for (var i = 0; i < n; i++) {
+    var a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 180;
+    particles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, life: 0.5 + Math.random() * 0.4, max: 0.9, color: color, size: 2 + Math.random() * 3, g: 300 });
+  }
+}
+
+// ------------------------------------------------------------- update ------
+function update(dt) {
+  T += dt;
+  if (shake > 0) shake = Math.max(0, shake - dt * 42);
+  if (introFade > 0) introFade -= dt;
+
+  var k = Math.min(1, dt * LERP);
+  for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) {
+    var t = grid[r][c]; if (!t) continue;
+    t.x = lerp(t.x, t.tx, k); t.y = lerp(t.y, t.ty, k);
+    if (Math.abs(t.x - t.tx) < 0.6) t.x = t.tx;
+    if (Math.abs(t.y - t.ty) < 0.6) t.y = t.ty;
+    if (t.pulse > 0) t.pulse = Math.max(0, t.pulse - dt * 3);
+  }
+
+  if (anim) {
+    var ph = anim.phase;
+    if (ph === "swap") {
+      if (allSettled()) {
+        var m = findMatches();
+        if (countKeys(m)) { combo = 0; doClear(m); }
+        else { swapCells(anim.a, anim.b); anim = { phase: "swapback" }; sfxBad(); }
+      }
+    } else if (ph === "swapback") {
+      if (allSettled()) { state = "play"; anim = null; sel = null; idleTimer = 0; }
+    } else if (ph === "clear") {
+      anim.timer -= dt * 1000;
+      if (anim.timer <= 0) { collapse(); anim = { phase: "fall" }; }
+    } else if (ph === "fall") {
+      if (allSettled()) {
+        var m2 = findMatches();
+        if (countKeys(m2)) doClear(m2); else endCascade();
+      }
+    }
+  } else if (state === "play") {
+    idleTimer += dt;
+    if (!guiding && !hint && idleTimer > HINT_DELAY) hint = findHint();
+  }
+
+  // clearing pops
+  for (var i = clearing.length - 1; i >= 0; i--) {
+    clearing[i].t += dt * 1000;
+    if (clearing[i].t >= CLEAR_MS) clearing.splice(i, 1);
+  }
+  // particles
+  for (i = particles.length - 1; i >= 0; i--) {
+    var p = particles[i];
+    p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  // floaters
+  for (i = floaters.length - 1; i >= 0; i--) {
+    var f = floaters[i]; f.t += dt; f.y -= 34 * dt;
+    if (f.t >= f.dur) floaters.splice(i, 1);
+  }
+  if (state === "win") winTime += dt;
+}
+
+// ------------------------------------------------------------- drawing -----
+function rr(x, y, w, h, rad) {
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
+function glyphPath(type, R) {
+  ctx.beginPath();
+  if (type === 0) { // Ember — flame
+    ctx.moveTo(0, R);
+    ctx.bezierCurveTo(-R * 0.95, R * 0.25, -R * 0.45, -R * 0.55, -R * 0.12, -R);
+    ctx.bezierCurveTo(-R * 0.05, -R * 0.5, R * 0.35, -R * 0.55, R * 0.12, -R * 0.15);
+    ctx.bezierCurveTo(R * 0.5, -R * 0.35, R * 0.95, R * 0.2, 0, R);
+    ctx.closePath();
+  } else if (type === 1) { // Tide — droplet
+    ctx.moveTo(0, -R);
+    ctx.bezierCurveTo(R * 0.82, -R * 0.15, R * 0.72, R, 0, R);
+    ctx.bezierCurveTo(-R * 0.72, R, -R * 0.82, -R * 0.15, 0, -R);
+    ctx.closePath();
+  } else if (type === 2) { // Verdant — leaf
+    ctx.moveTo(0, -R * 1.05);
+    ctx.bezierCurveTo(R * 0.95, -R * 0.35, R * 0.6, R * 0.7, 0, R * 1.0);
+    ctx.bezierCurveTo(-R * 0.6, R * 0.7, -R * 0.95, -R * 0.35, 0, -R * 1.05);
+    ctx.closePath();
+  } else if (type === 3) { // Solar — 5-point star
+    for (var i = 0; i < 10; i++) {
+      var ang = -Math.PI / 2 + i * Math.PI / 5;
+      var rad = (i % 2 === 0) ? R * 1.05 : R * 0.46;
+      var x = Math.cos(ang) * rad, y = Math.sin(ang) * rad;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  } else if (type === 4) { // Amethyst — crystal diamond
+    ctx.moveTo(0, -R * 1.05); ctx.lineTo(R * 0.72, -R * 0.1); ctx.lineTo(0, R * 1.05); ctx.lineTo(-R * 0.72, -R * 0.1);
+    ctx.closePath();
+  }
+  // type 5 (Frost) is stroked separately
+}
+
+function drawGlyph(type, cx, cy, s, scale, alpha) {
+  var R = s * 0.30 * (scale == null ? 1 : scale);
+  ctx.save();
+  ctx.globalAlpha = alpha == null ? 1 : alpha;
+  ctx.translate(cx, cy);
+  var t = TYPES[type];
+
+  // tile backing — dark glass
+  var bg = s * 0.86 * (scale == null ? 1 : scale);
+  rr(-bg / 2, -bg / 2, bg, bg, bg * 0.22);
+  var lg = ctx.createLinearGradient(0, -bg / 2, 0, bg / 2);
+  lg.addColorStop(0, "rgba(255,255,255,0.10)");
+  lg.addColorStop(1, "rgba(0,0,0,0.28)");
+  ctx.fillStyle = lg; ctx.fill();
+  ctx.lineWidth = Math.max(1, s * 0.02);
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
+  ctx.stroke();
+
+  // glow
+  ctx.shadowColor = t.glow;
+  ctx.shadowBlur = s * 0.24;
+
+  if (type === 5) { // Frost — snowflake (stroked)
+    ctx.strokeStyle = t.a;
+    ctx.lineCap = "round";
+    ctx.lineWidth = Math.max(2, s * 0.055);
+    for (var a = 0; a < 6; a++) {
+      var ang = a * Math.PI / 3;
+      var ux = Math.cos(ang), uy = Math.sin(ang);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ux * R * 1.05, uy * R * 1.05); ctx.stroke();
+      var bx = ux * R * 0.6, by = uy * R * 0.6;
+      var px = -uy, py = ux;
+      ctx.beginPath();
+      ctx.moveTo(bx - px * R * 0.28, by - py * R * 0.28);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(bx + px * R * 0.28, by + py * R * 0.28);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+
+  if (type === 2) ctx.rotate(0.35); // tilt the leaf
+  glyphPath(type, R);
+  var rg = ctx.createLinearGradient(0, -R, 0, R);
+  rg.addColorStop(0, t.a); rg.addColorStop(1, t.b);
+  ctx.fillStyle = rg; ctx.fill();
+  // inner facet lines for the crystal
+  if (type === 4) {
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.lineWidth = Math.max(1, s * 0.015);
+    ctx.beginPath(); ctx.moveTo(0, -R * 1.05); ctx.lineTo(0, R * 1.05);
+    ctx.moveTo(-R * 0.72, -R * 0.1); ctx.lineTo(R * 0.72, -R * 0.1); ctx.stroke();
+  }
+  // soft top highlight
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = (alpha == null ? 1 : alpha) * 0.5;
+  ctx.beginPath(); ctx.arc(-R * 0.28, -R * 0.34, R * 0.22, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.8)"; ctx.fill();
+  ctx.restore();
+}
+
+function drawBackground() {
+  var g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#0b0a1e"); g.addColorStop(0.55, "#0a0818"); g.addColorStop(1, "#06060f");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // aurora blobs
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (var i = 0; i < aurora.length; i++) {
+    var au = aurora[i];
+    var x = W * (0.5 + 0.42 * Math.sin(T * au.sx + au.px));
+    var y = H * (0.35 + 0.30 * Math.cos(T * au.sy + au.py));
+    var rad = au.rad * Math.min(W, H);
+    var rg = ctx.createRadialGradient(x, y, 0, x, y, rad);
+    rg.addColorStop(0, au.col); rg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = rg; ctx.globalAlpha = 0.18;
+    ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+  // stars
+  for (i = 0; i < stars.length; i++) {
+    var s = stars[i];
+    var tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(T * s.tw + s.ph));
+    ctx.globalAlpha = tw * 0.8;
+    ctx.fillStyle = "#cfe0ff";
+    ctx.fillRect(s.x * W, s.y * H, s.s, s.s);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawBoardPanel() {
+  var pad = tile * 0.12;
+  rr(boardX - pad, boardY - pad, boardSize + pad * 2, boardSize + pad * 2, tile * 0.28);
+  ctx.fillStyle = "rgba(255,255,255,0.035)";
+  ctx.fill();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.stroke();
+  // cell sockets
+  for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) {
+    var p = cellCenter(r, c);
+    rr(p.x - tile * 0.43, p.y - tile * 0.43, tile * 0.86, tile * 0.86, tile * 0.2);
+    ctx.fillStyle = "rgba(0,0,0,0.22)"; ctx.fill();
+  }
+}
+
+function drawGuide(g) {
+  if (!g) return;
+  var pa = cellCenter(g.a.r, g.a.c), pb = cellCenter(g.b.r, g.b.c);
+  // pulse rings on both cells
+  var pr = 0.5 + 0.5 * Math.sin(T * 5);
+  ctx.save();
+  ctx.lineWidth = Math.max(2, tile * 0.05);
+  ctx.strokeStyle = "rgba(255,255,255," + (0.35 + pr * 0.4) + ")";
+  [pa, pb].forEach(function (p) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, tile * (0.34 + pr * 0.1), 0, Math.PI * 2); ctx.stroke();
+  });
+  // travelling touch dot A<->B (triangle wave)
+  var tt = (T * 0.9) % 1; var wv = tt < 0.5 ? tt * 2 : (1 - tt) * 2;
+  var hx = lerp(pa.x, pb.x, wv), hy = lerp(pa.y, pb.y, wv);
+  ctx.shadowColor = "rgba(255,255,255,0.9)"; ctx.shadowBlur = 16;
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.beginPath(); ctx.arc(hx, hy, tile * 0.14, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 0.35;
+  ctx.beginPath(); ctx.arc(hx, hy, tile * 0.14 + (tt * tile * 0.35), 0, Math.PI * 2);
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+  ctx.restore();
+}
+
+function drawHUD() {
+  // title
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  var ts = Math.min(hudH * 0.34, 30);
+  ctx.font = "700 " + ts + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = "#eef1ff";
+  ctx.shadowColor = "#6c8cff"; ctx.shadowBlur = 12;
+  ctx.fillText("GLYPHFALL", boardX, hudH * 0.34);
+  ctx.shadowBlur = 0;
+
+  // progress bar
+  var bx = boardX, bw = boardSize, by = hudH * 0.68, bh = Math.max(10, hudH * 0.20);
+  rr(bx, by, bw, bh, bh / 2);
+  ctx.fillStyle = "rgba(255,255,255,0.10)"; ctx.fill();
+  var pr = clamp(score / TARGET_SCORE, 0, 1);
+  if (pr > 0.001) {
+    ctx.save();
+    rr(bx, by, bw, bh, bh / 2); ctx.clip();
+    var g = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+    g.addColorStop(0, "#6be0ff"); g.addColorStop(0.5, "#9b6bff"); g.addColorStop(1, "#ff6bd0");
+    ctx.fillStyle = g; ctx.fillRect(bx, by, bw * pr, bh);
+    ctx.restore();
+    // leading glow
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath(); ctx.arc(bx + bw * pr, by + bh / 2, bh * 0.6, 0, Math.PI * 2); ctx.fill();
+  }
+  // score
+  ctx.textAlign = "right";
+  ctx.font = "700 " + ts + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = "#eef1ff";
+  ctx.fillText(score + " / " + TARGET_SCORE, boardX + boardSize, hudH * 0.34);
+
+  // mute button
+  var ms = Math.min(hudH * 0.3, 24);
+  muteRect = { x: boardX + boardSize - ms, y: hudH * 0.02, w: ms, h: ms };
+  ctx.save();
+  ctx.translate(muteRect.x + ms / 2, muteRect.y + ms / 2);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.beginPath();
+  ctx.moveTo(-ms * 0.35, -ms * 0.14); ctx.lineTo(-ms * 0.1, -ms * 0.14);
+  ctx.lineTo(ms * 0.1, -ms * 0.32); ctx.lineTo(ms * 0.1, ms * 0.32);
+  ctx.lineTo(-ms * 0.1, ms * 0.14); ctx.lineTo(-ms * 0.35, ms * 0.14); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.lineWidth = Math.max(1.5, ms * 0.08); ctx.lineCap = "round";
+  if (muted) { ctx.beginPath(); ctx.moveTo(ms * 0.18, -ms * 0.2); ctx.lineTo(ms * 0.42, ms * 0.2); ctx.moveTo(ms * 0.42, -ms * 0.2); ctx.lineTo(ms * 0.18, ms * 0.2); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(ms * 0.18, 0, ms * 0.2, -0.6, 0.6); ctx.stroke(); ctx.beginPath(); ctx.arc(ms * 0.18, 0, ms * 0.36, -0.6, 0.6); ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawEndCard() {
+  var a = clamp(winTime / 0.45, 0, 1);
+  ctx.fillStyle = "rgba(6,6,16," + (0.82 * a) + ")";
+  ctx.fillRect(0, 0, W, H);
+
+  var cy = H * 0.30;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  var pop = 1 + 0.04 * Math.sin(T * 4);
+
+  // headline
+  var hs = Math.min(W * 0.11, 58) * Math.min(1, a * 1.2);
+  ctx.font = "800 " + hs + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.save();
+  ctx.shadowColor = "#8f6bff"; ctx.shadowBlur = 24;
+  var g = ctx.createLinearGradient(0, cy - hs, 0, cy + hs);
+  g.addColorStop(0, "#8be9ff"); g.addColorStop(1, "#ff8fe0");
+  ctx.fillStyle = g;
+  ctx.fillText("RUNE CHARGED!", W / 2, cy);
+  ctx.restore();
+
+  ctx.globalAlpha = a;
+  ctx.font = "500 " + Math.min(W * 0.045, 22) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = "#c6ccEE";
+  ctx.fillText("You matched your way to victory.", W / 2, cy + hs * 0.75);
+  ctx.font = "700 " + Math.min(W * 0.05, 24) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = "#ffd86b";
+  ctx.fillText("Score  " + score, W / 2, cy + hs * 1.4);
+
+  // CTA button
+  var bw = Math.min(W * 0.7, 320), bh = Math.min(H * 0.09, 66);
+  var bx = (W - bw) / 2, by = H * 0.62;
+  ctaRect = { x: bx, y: by, w: bw, h: bh };
+  ctx.save();
+  ctx.translate(bx + bw / 2, by + bh / 2); ctx.scale(pop, pop); ctx.translate(-(bx + bw / 2), -(by + bh / 2));
+  rr(bx, by, bw, bh, bh / 2);
+  var bg = ctx.createLinearGradient(bx, by, bx, by + bh);
+  bg.addColorStop(0, "#5be27a"); bg.addColorStop(1, "#22b04e");
+  ctx.fillStyle = bg;
+  ctx.shadowColor = "rgba(60,220,120,0.6)"; ctx.shadowBlur = 26;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#062a12";
+  ctx.font = "800 " + Math.min(bh * 0.36, bw * 0.082) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillText("▶  PLAY THE FULL GAME", W / 2, by + bh / 2 + 1);
+  ctx.restore();
+
+  ctx.globalAlpha = a * 0.6;
+  ctx.font = "500 " + Math.min(W * 0.035, 15) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+  ctx.fillStyle = "#9aa2c8";
+  ctx.fillText("GLYPHFALL — free to play", W / 2, by + bh + 26);
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawBackground();
+
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+
+  drawBoardPanel();
+
+  // guide/hint under tiles-ish (draw rings, then tiles, then travelling dot on top)
+  var g = guiding ? guideHint : hint;
+
+  // tiles
+  for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) {
+    var t = grid[r][c]; if (!t) continue;
+    var extra = t.pulse > 0 ? 1 + t.pulse * 0.08 : 1;
+    var isSel = sel && sel.r === t.r && sel.c === t.c;
+    if (isSel) {
+      ctx.save();
+      ctx.shadowColor = TYPES[t.type].glow; ctx.shadowBlur = tile * 0.4;
+      drawGlyph(t.type, t.x, t.y, tile, 1.08, 1);
+      ctx.restore();
+    } else {
+      drawGlyph(t.type, t.x, t.y, tile, extra, 1);
+    }
+  }
+
+  // clearing pops
+  for (var i = 0; i < clearing.length; i++) {
+    var cl = clearing[i];
+    var pp = cl.t / CLEAR_MS;
+    drawGlyph(cl.type, cl.x, cl.y, tile, 1 + pp * 0.4, 1 - pp);
+  }
+
+  if (g && state === "play") drawGuide(g);
+
+  // particles (additive)
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (i = 0; i < particles.length; i++) {
+    var p = particles[i];
+    ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+
+  // floaters
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (i = 0; i < floaters.length; i++) {
+    var f = floaters[i];
+    var fa = 1 - clamp(f.t / f.dur, 0, 1);
+    ctx.globalAlpha = fa;
+    ctx.font = "800 " + f.size + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.fillStyle = f.color;
+    ctx.shadowColor = f.color; ctx.shadowBlur = 12;
+    ctx.fillText(f.text, f.x, f.y);
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.restore(); // shake
+
+  drawHUD();
+
+  // intro tagline
+  if (introFade > 0 && state === "play") {
+    ctx.globalAlpha = clamp(introFade, 0, 1) * 0.9;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "600 " + Math.min(W * 0.05, 22) + "px -apple-system,Segoe UI,Roboto,sans-serif";
+    ctx.fillStyle = "#dfe4ff";
+    ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+    ctx.fillText("Swap runes • match 3 or more", W / 2, boardY + boardSize + Math.min(40, (H - boardY - boardSize) * 0.5));
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+
+  if (state === "win") drawEndCard();
+}
+
+// ------------------------------------------------------------- input ------
+function tileAt(px, py) {
+  if (px < boardX || px > boardX + boardSize || py < boardY || py > boardY + boardSize) return null;
+  var c = Math.floor((px - boardX) / tile), r = Math.floor((py - boardY) / tile);
+  if (r < 0 || r >= GRID || c < 0 || c >= GRID) return null;
+  return { r: r, c: c };
+}
+function hitRect(rc, px, py) { return rc && px >= rc.x && px <= rc.x + rc.w && py >= rc.y && py <= rc.y + rc.h; }
+
+function onDown(px, py) {
+  ensureAudio();
+  if (hitRect(muteRect, px, py)) { muted = !muted; if (!muted) sfxSwap(); return; }
+
+  if (state === "win") {
+    if (hitRect(ctaRect, px, py)) redirect(STORE_URL);
+    return;
+  }
+  if (anim) return; // busy
+
+  var cell = tileAt(px, py);
+  if (!cell) { sel = null; return; }
+  idleTimer = 0; hint = null;
+
+  if (sel && adjacent(sel, cell)) { beginSwap(sel, cell); return; }
+  sel = cell;
+  var t = grid[cell.r][cell.c]; if (t) t.pulse = 1;
+  dragStart = { x: px, y: py }; dragging = true;
+}
+function onMove(px, py) {
+  if (!dragging || !sel || anim || state !== "play") return;
+  var dx = px - dragStart.x, dy = py - dragStart.y;
+  if (Math.abs(dx) < tile * 0.35 && Math.abs(dy) < tile * 0.35) return;
+  var nb;
+  if (Math.abs(dx) > Math.abs(dy)) nb = { r: sel.r, c: sel.c + (dx > 0 ? 1 : -1) };
+  else nb = { r: sel.r + (dy > 0 ? 1 : -1), c: sel.c };
+  if (nb.r < 0 || nb.r >= GRID || nb.c < 0 || nb.c >= GRID) { dragging = false; return; }
+  beginSwap(sel, nb); dragging = false;
+}
+function onUp() { dragging = false; }
+
+function relCoords(e) {
+  var rect = canvas.getBoundingClientRect();
+  var t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+  return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+}
+canvas.addEventListener("pointerdown", function (e) { e.preventDefault(); var p = relCoords(e); onDown(p.x, p.y); }, { passive: false });
+canvas.addEventListener("pointermove", function (e) { e.preventDefault(); var p = relCoords(e); onMove(p.x, p.y); }, { passive: false });
+canvas.addEventListener("pointerup", function (e) { e.preventDefault(); onUp(); }, { passive: false });
+canvas.addEventListener("pointercancel", function () { onUp(); });
+
+// ------------------------------------------------------------- layout -----
+function layout() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR); canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + "px"; canvas.style.height = H + "px";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  hudH = clamp(H * 0.13, 66, 120);
+  var pad = clamp(Math.min(W, H) * 0.035, 10, 34);
+  var availW = W - pad * 2, availH = H - hudH - pad * 2;
+  boardSize = Math.min(availW, availH, 600);
+  tile = boardSize / GRID;
+  boardX = (W - boardSize) / 2;
+  boardY = hudH + (H - hudH - boardSize) / 2;
+
+  if (grid.length) for (var r = 0; r < GRID; r++) for (var c = 0; c < GRID; c++) {
+    var t = grid[r][c]; if (!t) continue;
+    retarget(t); t.x = t.tx; t.y = t.ty;
+  }
+}
+window.addEventListener("resize", layout);
+window.addEventListener("orientationchange", function () { setTimeout(layout, 120); });
+
+// ------------------------------------------------------------- ambiance ---
+function initAmbiance() {
+  stars = [];
+  for (var i = 0; i < 60; i++) stars.push({ x: Math.random(), y: Math.random(), s: Math.random() < 0.8 ? 1 : 2, tw: 0.6 + Math.random() * 2, ph: Math.random() * 7 });
+  aurora = [
+    { col: "rgba(90,120,255,1)", rad: 0.7, sx: 0.08, sy: 0.06, px: 0, py: 1 },
+    { col: "rgba(190,80,220,1)", rad: 0.6, sx: 0.05, sy: 0.09, px: 2, py: 3 },
+    { col: "rgba(60,200,200,1)", rad: 0.5, sx: 0.07, sy: 0.05, px: 4, py: 0 }
+  ];
+}
+
+// ------------------------------------------------------------- loop -------
+var last = 0;
+function frame(ts) {
+  if (!last) last = ts;
+  var dt = Math.min(0.05, (ts - last) / 1000);
+  last = ts;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+// ------------------------------------------------------------- boot -------
+initAmbiance();
+layout();
+newBoard();
+requestAnimationFrame(frame);
+
+/* ================================================================= *
+ *  AD-NETWORK / MRAID INTEGRATION HOOK
+ *  ---------------------------------------------------------------
+ *  Playable ads run inside an ad container that exposes the MRAID API
+ *  (mraid.open). Networks (AppLovin, ironSource, Unity Ads, Mintegral…)
+ *  inject the real store URL at serve time. We prefer MRAID when present
+ *  and fall back to window.open so the ad still works standalone (this
+ *  demo / double-click). Replace STORE_URL with the network macro.
+ * ================================================================= */
+var STORE_URL = "https://example.com/get-glyphfall"; // placeholder — network overrides
+function redirect(url) {
+  url = url || STORE_URL;
+  try {
+    if (typeof mraid !== "undefined" && mraid.open) { mraid.open(url); return; }
+  } catch (e) { /* not in an MRAID container */ }
+  window.open(url, "_blank");
+}
+
+// tiny debug hook (harmless) for automated smoke-testing
+window.GF = {
+  state: function () { return state; },
+  score: function () { return score; },
+  hint: findHint,
+  play: function () { if (anim || state !== "play") return false; var h = findHint(); if (h) beginSwap(h.a, h.b); return !!h; }
+};
+})();
+</script>
+</body>
+</html>
