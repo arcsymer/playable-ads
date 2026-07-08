@@ -58,7 +58,7 @@ var hintPath = null;
 var guiding = true, idleTimer = 0;
 var particles = [], floaters = [];
 var shake = 0, T = 0, introFade = 3.6, muted = false, winTime = 0;
-var tubeRects = [], seal = [];  // seal[i] pulse when completed
+var tubeRects = [], seal = [], liftT = [];  // seal[i] completion pulse; liftT[i] eased select-lift 0..1
 var undoRect = null, muteRect = null, ctaRect = null, land = false;
 var stars = [], aurora = [];
 
@@ -164,7 +164,7 @@ function genLevel(def) {
 function loadLevel(i) {
   tubes = genLevel(LEVELS[i]);
   undoStack = []; sel = -1; anim = null; guiding = true; idleTimer = 0; introFade = 2.8;
-  seal = tubes.map(function () { return 0; });
+  seal = tubes.map(function () { return 0; }); liftT = tubes.map(function () { return 0; });
   layout();          // rebuild tubeRects for this level's vial count
   recomputeHint();
 }
@@ -219,6 +219,8 @@ function update(dt) {
   if (shake > 0) shake = Math.max(0, shake - dt * 34);
   if (introFade > 0) introFade -= dt;
   for (var i = 0; i < seal.length; i++) if (seal[i] > 0) seal[i] = Math.max(0, seal[i] - dt * 1.4);
+  // eased select-lift per tube (ease-out up, ease-in down, no snapping)
+  for (i = 0; i < liftT.length; i++) { var _tgt = (sel === i && state === "play") ? 1 : 0; liftT[i] += (_tgt - liftT[i]) * Math.min(1, dt * 11); if (Math.abs(liftT[i] - _tgt) < 0.002) liftT[i] = _tgt; }
 
   if (anim) { anim.t += dt * 1000 / anim.dur; if (anim.t >= 1) finishPour(); }
   else if (transition) {
@@ -263,6 +265,25 @@ function drawSegment( intr, x, w, i, colorIdx, topOfRun) {
   if (topOfRun) { ctx.fillStyle = "rgba(255,255,255,0.28)"; ctx.fillRect(x, yTop, w, Math.max(2, intr.seg * 0.12)); }
   emblem(x + w / 2, yTop + intr.seg / 2, intr.seg * 0.2, c.em, 0.28);
 }
+function drawLiftedBlob(intr, x, w, ir, fromIdx, count, colorIdx, lift) {
+  var c = COLORS[colorIdx];
+  var yBottom = intr.bottom - fromIdx * intr.seg, h = count * intr.seg, yTop = yBottom - h - lift;
+  var rad = Math.min(ir, h / 2, w / 2);
+  ctx.save();
+  // soft drop-shadow sells the "popped up" feel
+  ctx.shadowColor = "rgba(0,0,0,0.28)"; ctx.shadowBlur = w * 0.28; ctx.shadowOffsetY = 4;
+  rr(x, yTop, w, h, rad);
+  var g = ctx.createLinearGradient(0, yTop, 0, yTop + h); g.addColorStop(0, c.a); g.addColorStop(1, c.b);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  // colour glow rim (same identity as the resting blob)
+  rr(x, yTop, w, h, rad); ctx.strokeStyle = c.glow; ctx.globalAlpha = 0.5; ctx.lineWidth = Math.max(1.5, w * 0.045); ctx.stroke(); ctx.globalAlpha = 1;
+  // top highlight — identical to a resting top-of-run
+  ctx.save(); rr(x, yTop, w, h, rad); ctx.clip(); ctx.fillStyle = "rgba(255,255,255,0.28)"; ctx.fillRect(x, yTop, w, Math.max(2, intr.seg * 0.12)); ctx.restore();
+  // emblems, one per unit, same style as resting
+  for (var k = 0; k < count; k++) emblem(x + w / 2, yTop + h - (k + 0.5) * intr.seg, intr.seg * 0.2, c.em, 0.28);
+  ctx.restore();
+}
 function drawTube(idx) {
   var r = tubeRects[idx], t = tubes[idx], intr = tubeInterior(r);
   var selected = (sel === idx);
@@ -278,19 +299,20 @@ function drawTube(idx) {
   ctx.beginPath();
   var iw = intr.w, ix = intr.x, ir = iw * 0.42;
   rr(ix, intr.top, iw, intr.bottom - intr.top, ir); ctx.clip();
-  var lift = selected ? intr.seg * 0.55 : 0;
+  var lt = liftT[idx] || 0;
+  var lift = lt * intr.seg * 0.72 + (lt > 0.01 ? Math.sin(T * 3.6) * intr.seg * 0.05 * lt : 0); // eased hover + subtle bob
   var rl = runLen(t);
   var hideTop = (anim && anim.d === idx) ? anim.n : 0;   // dest: top n arrive via animation
-  var drainTop = (anim && anim.s === idx) ? 0 : 0;       // src already reduced in model
   var visible = t.length - hideTop;
+  var liftFrom = t.length - rl;                          // indices belonging to the lifted top run
   for (var i = 0; i < visible; i++) {
+    if (lt > 0.01 && i >= liftFrom) continue;            // top run is drawn as a rounded blob below (outside the clip)
     var topOfRun = (i === t.length - 1) || (t[i] !== t[i + 1]);
-    var yOff = (selected && i >= t.length - rl) ? -lift : 0;
-    ctx.save(); ctx.translate(0, yOff);
     drawSegment(intr, ix, iw, i, t[i], topOfRun);
-    ctx.restore();
   }
   ctx.restore();
+  // selected/lifted run: a rounded blob identical in style to a resting segment, hovering above the mouth
+  if (lt > 0.01 && rl > 0 && !hideTop) drawLiftedBlob(intr, ix, iw, ir, liftFrom, rl, t[t.length - 1], lift);
 
   // glass outline + lip + highlight
   rr(r.x, r.y + r.w * 0.14, r.w, r.h - r.w * 0.14, rad);
