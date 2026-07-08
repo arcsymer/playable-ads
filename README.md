@@ -11,7 +11,7 @@ mobile-first, ~15–30 s of gameplay ending in an **install CTA**.
 |----|-------|--------|-----------|------|
 | **GLYPHFALL** | Match-3 (aurora runes) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/match3/) | **31 KB** |
 | **STARDUST FOUNDRY** | Tycoon (tap-to-earn) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/tycoon/) | **29 KB** |
-| Puzzle | One clean mechanic | 🚧 In progress | — | — |
+| **PRISM POUR** | Puzzle (colour-sort) | ✅ Live | [play](https://arcsymer.github.io/playable-ads/puzzle/) | **29 KB** |
 
 > These are **original prototypes to show the format**, not shipped campaigns. The
 > operator has 5 Unity games + a TS/JS core stack but no prior shipped playable ads —
@@ -103,6 +103,30 @@ goes supernova → install CTA. Engaged play ignites in **~18 s**.
 Same single-file Canvas skeleton as GLYPHFALL (responsive DPR canvas, delta-time loop,
 unified pointer input, state machine, procedural art, Web-Audio SFX) and the same MRAID /
 `redirect()` hook at the bottom of [`tycoon/index.html`](tycoon/index.html).
+
+## PRISM POUR (puzzle) — live
+
+![PRISM POUR gameplay](media/puzzle.gif)
+
+A **colour-sort** puzzle: tap a crystal vial, then another, to pour the top run of
+glowing light-essence across — legal only onto a matching colour (or an empty vial).
+Sort every vial to a single pure colour to solve. Two short levels (3 then 4 colours),
+then the install CTA.
+
+- **Provably never stuck.** Each level is *generated then verified solvable* by a built-in
+  BFS solver before it's shown. That same solver drives the animated **guided first move**
+  and the **inactivity hint** (recomputed from the *current* board, so it's always a real
+  solving move) — plus an **Undo** to back out of any dead-end. It cannot soft-lock.
+- **Accessible:** each colour carries a distinct **emblem** (circle / triangle / square /
+  diamond), so it reads by shape as well as hue.
+- **Juice:** lifting/pouring vial animation with an arcing stream, a "seal" flare + chime
+  when a vial is completed, a level-clear flourish, particle finish, Web-Audio SFX.
+- **Weight:** **~29 KB**, one HTML file, no assets.
+
+<p align="center"><img src="media/puzzle-portrait.png" width="240" alt="tap a vial then another to pour"> <img src="media/puzzle-endcard.png" width="240" alt="perfectly sorted — install CTA"></p>
+
+Same single-file Canvas skeleton and the same MRAID / `redirect()` hook at the bottom of
+[`puzzle/index.html`](puzzle/index.html).
 
 ## Run it locally
 
