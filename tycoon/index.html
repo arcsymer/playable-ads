@@ -472,7 +472,7 @@ function drawEndCard() {
   rr(bx, by, bw, bh, bh / 2); var bg = ctx.createLinearGradient(bx, by, bx, by + bh); bg.addColorStop(0, "#ffc35b"); bg.addColorStop(1, "#ff8a2b");
   ctx.fillStyle = bg; ctx.shadowColor = "rgba(255,170,60,0.6)"; ctx.shadowBlur = 26; ctx.fill(); ctx.shadowBlur = 0;
   ctx.fillStyle = "#3a1c02"; ctx.font = "800 " + Math.min(bh * 0.34, bw * 0.07) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText("▶  BUILD YOUR EMPIRE", W / 2, by + bh / 2 + 1); ctx.restore();
-  ctx.globalAlpha = a * 0.6; ctx.fillStyle = "#9aa2c8"; ctx.font = "500 " + Math.min(W * 0.035, 15) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText("GRILL RUSH — free to play", W / 2, by + bh + 26); ctx.globalAlpha = 1;
+  ctx.globalAlpha = a * 0.6; ctx.fillStyle = "#9aa2c8"; ctx.font = "500 " + Math.min(W * 0.035, 15) + "px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.fillText("GRILL RUSH · built by @arcsymer", W / 2, by + bh + 26); ctx.globalAlpha = 1;
 }
 
 function render() {
